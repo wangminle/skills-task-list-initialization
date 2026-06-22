@@ -436,6 +436,49 @@ class TaskListCliTest(unittest.TestCase):
             self.assertFalse(payload["maintenance"]["rule_installed"])
             self.assertFalse(payload["maintenance"]["hook_installed"])
 
+    def test_standardize_detects_rule_in_agents_when_claude_also_exists(self):
+        # Regression: when both CLAUDE.md and AGENTS.md exist but the rule is only in
+        # AGENTS.md, detection must NOT stop at CLAUDE.md and falsely report 未检测到
+        # (which would prompt a duplicate install).
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            (Path(tmp) / "CLAUDE.md").write_text("# 项目说明\n\n无同步规则。\n", encoding="utf-8")
+            (Path(tmp) / "AGENTS.md").write_text(
+                "## 会话结束任务同步\n\n规则正文略。\n", encoding="utf-8"
+            )
+            result = self.run_cli("standardize", "--file", str(target))
+            self.assertIn("agent 文件：AGENTS.md", result.stdout)
+            self.assertIn("会话结束同步规则：已安装", result.stdout)
+            self.assertNotIn("会话结束同步规则：未检测到", result.stdout)
+            self.assertNotIn("询问用户是否安装", result.stdout)
+
+    def test_standardize_prefers_claude_when_both_agent_files_have_rule(self):
+        # When both files carry the marker, report CLAUDE.md (the install-side preference)
+        # as the containing file, still flagged as installed.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            rule = "## 会话结束任务同步（必须）\n\n规则正文略。\n"
+            (Path(tmp) / "CLAUDE.md").write_text(rule, encoding="utf-8")
+            (Path(tmp) / "AGENTS.md").write_text(rule, encoding="utf-8")
+            result = self.run_cli("standardize", "--file", str(target))
+            self.assertIn("agent 文件：CLAUDE.md", result.stdout)
+            self.assertIn("会话结束同步规则：已安装", result.stdout)
+
+    def test_standardize_no_rule_anywhere_points_at_claude_as_target(self):
+        # Both agent files exist, neither has the rule → 未检测到, and the install target
+        # shown is CLAUDE.md (preferred), not AGENTS.md.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            (Path(tmp) / "CLAUDE.md").write_text("# 项目说明\n", encoding="utf-8")
+            (Path(tmp) / "AGENTS.md").write_text("# Agents 说明\n", encoding="utf-8")
+            result = self.run_cli("standardize", "--file", str(target))
+            self.assertIn("agent 文件：CLAUDE.md", result.stdout)
+            self.assertIn("会话结束同步规则：未检测到", result.stdout)
+            self.assertIn("询问用户是否安装", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

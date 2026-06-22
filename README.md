@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-22%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-25%20passing-brightgreen.svg)](tests/)
 
 ---
 
@@ -23,7 +23,7 @@ Every project accumulates bugs, features, reviews, tests, docs, and ops work. Th
 - **Report-first standardization** — diagnoses before it edits; repairs only with explicit flags.
 - **Schema migration** — upgrades legacy single-date columns to the 发现时间 / 完成时间 model.
 - **Maintenance-rule check** — `standardize` detects whether the project already has the session-end sync rule and Stop hook, and flags them in the report so the agent can offer to install them.
-- **Tested** — 22 unit tests covering init, add, check, summary, standardize, aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, and maintenance-rule detection.
+- **Tested** — 25 unit tests covering init, add, check, summary, standardize, aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, and maintenance-rule detection.
 
 ### The Task List Standard
 
@@ -140,7 +140,7 @@ Every report also includes a **maintenance-rule status** section that detects wh
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-22 tests, all passing.
+25 tests, all passing.
 
 ### Project Structure
 
@@ -182,7 +182,7 @@ skills-task-list-initialization/
 - **先诊断后修复**——默认只生成报告，必须显式开启参数才会改写文件。
 - **结构迁移**——把旧的单日期列迁移到「发现时间 / 完成时间」。
 - **维护规则检测**——`standardize` 检查项目是否已安装会话结束同步规则与 Stop hook，并在报告中标注，由 agent 询问用户后按需安装。
-- **经过测试**——22 个单元测试，覆盖 init、add、check、summary、standardize、分区别名、反向别名、标题空白容错、`--fix-only` 语义与维护规则检测。
+- **经过测试**——25 个单元测试，覆盖 init、add、check、summary、standardize、分区别名、反向别名、标题空白容错、`--fix-only` 语义与维护规则检测。
 
 ### 任务清单标准
 
@@ -297,7 +297,7 @@ python3 skills/task-list-initialization/scripts/task_list_cli.py standardize \
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-22 个测试，全部通过。
+25 个测试，全部通过。
 
 ### 项目结构
 

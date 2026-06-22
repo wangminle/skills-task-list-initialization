@@ -468,19 +468,30 @@ def detect_maintenance_rule(project_root: Path) -> dict[str, object]:
     standardize surfaces this so the agent can offer to install the maintenance rule when it
     is missing — it never writes these files itself (installation follows maintenance-rule.md).
     """
-    agent_file: str | None = None
-    for candidate in ("CLAUDE.md", "AGENTS.md"):
-        if (project_root / candidate).exists():
-            agent_file = candidate
-            break
-
-    rule_installed = False
-    if agent_file:
+    # Scan BOTH agent files rather than stopping at the first one that exists. The rule may
+    # legitimately live in AGENTS.md even when CLAUDE.md is also present (e.g. installed before
+    # CLAUDE.md existed); checking only the first existing file would misreport it as missing
+    # and prompt a duplicate install. Prefer CLAUDE.md both when picking the file that holds
+    # the marker and when choosing the install target if neither has it yet.
+    candidates = ("CLAUDE.md", "AGENTS.md")
+    existing = [name for name in candidates if (project_root / name).exists()]
+    containing: list[str] = []
+    for name in existing:
         try:
-            text = (project_root / agent_file).read_text(encoding="utf-8")
-            rule_installed = MAINTENANCE_RULE_MARKER in text
+            if MAINTENANCE_RULE_MARKER in (project_root / name).read_text(encoding="utf-8"):
+                containing.append(name)
         except OSError:
-            rule_installed = False
+            continue
+
+    if containing:
+        agent_file = "CLAUDE.md" if "CLAUDE.md" in containing else containing[0]
+        rule_installed = True
+    elif existing:
+        agent_file = "CLAUDE.md" if "CLAUDE.md" in existing else existing[0]
+        rule_installed = False
+    else:
+        agent_file = None
+        rule_installed = False
 
     hook_installed = False
     settings_path = project_root / ".claude" / "settings.json"

@@ -20,6 +20,7 @@
 | BUG-007 | 修复 | insert_row 用精确字符串匹配标题，## 后多空格时 add 报未找到分区，与 parse_sections 的正则容忍不一致 | 2026-06-22 13:06 | 2026-06-22 13:06 | 已修复 | insert_row 改用 ^##\s+(.+?)\s*$ 正则匹配；新增 test_add_to_heading_with_irregular_whitespace；全部 18 测试通过 |
 | BUG-008 | 修复 | --date 同时作为发现/完成时间回退，导致待修复等未完成记录出现自相矛盾的完成时间 | 2026-06-22 13:30 | 2026-06-22 13:30 | 已修复 | completed_time 计算移除 or args.date；--date 仅回退发现时间（后续 BUG-005 进一步细化为完成态回填）；新增 test_add_date_does_not_seed_completed_time_for_incomplete |
 | BUG-009 | 修复 | standardize --dry-run 把修复后文件内容与诊断报告都打到 stdout，重定向会损坏文件 | 2026-06-22 13:30 | 2026-06-22 13:30 | 已修复 | dry-run 预览文件后，报告/摘要改走 stderr（status_stream）；新增 test_standardize_dry_run_stdout_is_only_file_content |
+| BUG-010 | 修复 | 维护规则检测在 CLAUDE.md 与 AGENTS.md 同时存在时 false negative：规则仅在 AGENTS.md 时命中 CLAUDE.md 即 break，误报未检测到并建议重复安装 | 2026-06-22 14:50 | 2026-06-22 14:50 | 已修复 | detect_maintenance_rule 改为扫描两个文件，contaming 列表优先返回 CLAUDE.md；未安装时回落到首选现有文件作为安装目标；新增 3 个回归测试（仅 AGENTS/双文件/均无），共 25 测试通过 |
 
 ## 调整事项
 
@@ -46,6 +47,7 @@
 | TST-006 | 检查 | 为调研/文档分区反向别名补充回归测试 | 2026-06-22 12:17 | 2026-06-22 12:17 | 已完成 | 新增 test_add_canonical_name_matches_legacy_research_heading、test_add_canonical_name_matches_legacy_doc_heading；python3 -m unittest 共 17 个测试全部通过 |
 | TST-007 | 检查 | 为标题空白容错补充回归测试 | 2026-06-22 13:06 | 2026-06-22 13:06 | 已完成 | test_add_to_heading_with_irregular_whitespace；python3 -m unittest 共 18 个测试全部通过 |
 | TST-008 | 检查 | 为 standardize 维护规则检测补充回归测试 | 2026-06-22 14:23 | 2026-06-22 14:23 | 已完成 | 4 个测试：缺失/规则+hook 齐全/仅规则缺 hook/JSON 输出；python3 -m unittest 共 22 个测试全部通过 |
+| TST-009 | 检查 | 为双 agent 文件维护规则检测补充回归测试 | 2026-06-22 14:50 | 2026-06-22 14:50 | 已完成 | 3 个测试：两文件均在但规则仅在 AGENTS.md（核心回归）/两文件均含规则优先 CLAUDE.md/两文件均无规则回落 CLAUDE.md 目标；python3 -m unittest 共 25 个测试全部通过 |
 
 ## 文档维护
 
