@@ -168,6 +168,57 @@ class TaskListCliTest(unittest.TestCase):
             self.assertIn("| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |", text)
             self.assertIn("| BUG-001 | 修复 | 旧字段 bug | 2026-06-17 00:00 | 2026-06-17 00:00 | 已修复 | 已验证 |", text)
 
+    def test_add_date_does_not_seed_completed_time_for_incomplete(self):
+        # Regression: --date is a legacy 发现时间 fallback and must NOT seed 完成时间
+        # for 未完成 statuses, otherwise the record is self-contradictory.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "未完成bug",
+                "--date", "2026-06-17", "--status", "待修复",
+            )
+
+            text = target.read_text(encoding="utf-8")
+            self.assertIn(
+                "| BUG-001 | 修复 | 未完成bug | 2026-06-17 00:00 | - | 待修复 | - |",
+                text,
+            )
+            self.assertNotIn(
+                "| BUG-001 | 修复 | 未完成bug | 2026-06-17 00:00 | 2026-06-17 00:00 |",
+                text,
+            )
+
+    def test_standardize_dry_run_stdout_is_only_file_content(self):
+        # Regression: --dry-run must keep stdout to the previewed file content only;
+        # the diagnostic report must not be appended to the same stdout.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n",
+                encoding="utf-8",
+            )
+            before = target.read_text(encoding="utf-8")
+
+            result = self.run_cli(
+                "standardize", "--file", str(target), "--apply-safe-fixes", "--dry-run"
+            )
+
+            # stdout is the previewed file: it has the newly added sections...
+            self.assertIn("## 调整事项", result.stdout)
+            self.assertIn("## 配置运维", result.stdout)
+            # ...and must NOT contain the diagnostic report
+            self.assertNotIn("# task-list 标准化诊断报告", result.stdout)
+            self.assertNotIn("推荐 Profile", result.stdout)
+            # the repair summary went to stderr, not stdout
+            self.assertIn("修复完成", result.stderr)
+            # original file untouched in dry-run
+            self.assertEqual(before, target.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

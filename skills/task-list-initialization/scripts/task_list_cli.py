@@ -290,7 +290,9 @@ def command_add(args: argparse.Namespace) -> int:
     item_id = args.id or next_id(prefix, text)
     now = local_minute_now()
     found_time = normalize_time(args.found_time or args.date, now)
-    completed_time = normalize_time(args.completed_time or args.date, default_completed_time(args.status, now))
+    # --date is a legacy single-date fallback for 发现时间 only; it must not seed 完成时间,
+    # otherwise 未完成 records (待修复/待开发/进行中) get a self-contradictory completion date.
+    completed_time = normalize_time(args.completed_time, default_completed_time(args.status, now))
     description = args.description
     notes = args.notes or "-"
 
@@ -744,11 +746,16 @@ def command_standardize(args: argparse.Namespace) -> int:
         working_text, fixes = add_missing_sections(working_text, chosen_profile)
         applied_fixes.extend(fixes)
 
+    # When previewing with --dry-run, stdout is reserved for the file content so it can be
+    # redirected safely; route all status/report messages to stderr in that case.
+    printed_preview = False
     if should_fix and working_text != original_text:
         if args.dry_run:
             print(working_text, end="")
+            printed_preview = True
         else:
             path.write_text(working_text, encoding="utf-8")
+    status_stream = sys.stderr if printed_preview else sys.stdout
 
     report = analyze_standardization(working_text, args.profile, str(path))
     if args.format == "json":
@@ -760,18 +767,18 @@ def command_standardize(args: argparse.Namespace) -> int:
         report_path = Path(args.report)
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(rendered, encoding="utf-8")
-        print(f"已生成报告：{report_path}")
+        print(f"已生成报告：{report_path}", file=status_stream)
 
     if args.fix_only:
-        print(f"修复完成：{len(applied_fixes)} 项")
+        print(f"修复完成：{len(applied_fixes)} 项", file=status_stream)
         for fix in applied_fixes:
-            print(f"- {fix}")
+            print(f"- {fix}", file=status_stream)
         return 0
 
-    if not args.report:
+    if not args.report and not printed_preview:
         print(rendered, end="" if rendered.endswith("\n") else "\n")
     elif should_fix:
-        print(f"修复完成：{len(applied_fixes)} 项")
+        print(f"修复完成：{len(applied_fixes)} 项", file=status_stream)
 
     return 0
 
