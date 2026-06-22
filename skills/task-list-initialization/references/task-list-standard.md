@@ -124,6 +124,7 @@ python3 skills/task-list-initialization/scripts/task_list_cli.py standardize --f
 | 分类清晰度 | ID 前缀与所在章节是否一致，调研/优化/文档/运维事项是否混放 |
 | Profile 建议 | 是否继续使用 `minimal`，或升级为 `planning`、`extended`、`development` |
 | 可自动修复 | 缺失空分区、旧单日期 schema 迁移等低风险事项 |
+| 维护规则状态 | 是否已安装「会话结束任务同步」规则（CLAUDE.md/AGENTS.md）与可选 Stop hook；缺失时由 agent 询问用户后按 maintenance-rule.md 安装，CLI 只检测不安装 |
 | 需人工确认 | 重命名章节、移动记录、重写重复 ID、拆分语义混杂事项 |
 
 修复必须显式开启：

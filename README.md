@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-18%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-22%20passing-brightgreen.svg)](tests/)
 
 ---
 
@@ -22,7 +22,8 @@ Every project accumulates bugs, features, reviews, tests, docs, and ops work. Th
 - **CLI tooling** — generate, append, validate, summarize, and standardize via `task_list_cli.py`.
 - **Report-first standardization** — diagnoses before it edits; repairs only with explicit flags.
 - **Schema migration** — upgrades legacy single-date columns to the 发现时间 / 完成时间 model.
-- **Tested** — 18 unit tests covering init, add, check, summary, standardize, aliases, reverse aliases, heading-whitespace tolerance, and `--fix-only` semantics.
+- **Maintenance-rule check** — `standardize` detects whether the project already has the session-end sync rule and Stop hook, and flags them in the report so the agent can offer to install them.
+- **Tested** — 22 unit tests covering init, add, check, summary, standardize, aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, and maintenance-rule detection.
 
 ### The Task List Standard
 
@@ -131,13 +132,15 @@ Pick the smallest variant that fits. `development` is intended only when priorit
 
 It will not rename sections, move records, or rewrite duplicate IDs without your approval — those are semantic changes and appear as report recommendations.
 
+Every report also includes a **maintenance-rule status** section that detects whether the project has the session-end sync rule (`CLAUDE.md` / `AGENTS.md`) and the optional `Stop` hook installed. The CLI detects only; the agent asks before installing anything.
+
 ### Testing
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-18 tests, all passing.
+22 tests, all passing.
 
 ### Project Structure
 
@@ -147,7 +150,8 @@ skills-task-list-initialization/
 │   ├── SKILL.md                              # Skill definition
 │   ├── references/
 │   │   ├── task-list-standard.md             # Standard distilled from 4 projects
-│   │   └── task-list-template.md             # Canonical templates
+│   │   ├── task-list-template.md             # Canonical templates
+│   │   └── maintenance-rule.md               # Session-end sync rule + Stop hook template
 │   └── scripts/
 │       └── task_list_cli.py                  # Python CLI
 ├── tests/
@@ -177,7 +181,8 @@ skills-task-list-initialization/
 - **命令行工具**——通过 `task_list_cli.py` 完成生成、追加、校验、统计与标准化。
 - **先诊断后修复**——默认只生成报告，必须显式开启参数才会改写文件。
 - **结构迁移**——把旧的单日期列迁移到「发现时间 / 完成时间」。
-- **经过测试**——18 个单元测试，覆盖 init、add、check、summary、standardize、分区别名、反向别名、标题空白容错与 `--fix-only` 语义。
+- **维护规则检测**——`standardize` 检查项目是否已安装会话结束同步规则与 Stop hook，并在报告中标注，由 agent 询问用户后按需安装。
+- **经过测试**——22 个单元测试，覆盖 init、add、check、summary、standardize、分区别名、反向别名、标题空白容错、`--fix-only` 语义与维护规则检测。
 
 ### 任务清单标准
 
@@ -284,13 +289,15 @@ python3 skills/task-list-initialization/scripts/task_list_cli.py standardize \
 
 未经你同意，它不会重命名章节、移动记录或重写重复 ID——这些属于语义变更，只会作为报告建议出现。
 
+每份报告还包含**维护规则状态**分区，检测项目是否已安装会话结束同步规则（`CLAUDE.md` / `AGENTS.md`）与可选 `Stop` hook。CLI 只负责检测，是否安装由 agent 询问用户后再决定。
+
 ### 测试
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-18 个测试，全部通过。
+22 个测试，全部通过。
 
 ### 项目结构
 
@@ -300,7 +307,8 @@ skills-task-list-initialization/
 │   ├── SKILL.md                              # 技能定义
 │   ├── references/
 │   │   ├── task-list-standard.md             # 四项目归纳标准
-│   │   └── task-list-template.md             # 标准模板
+│   │   ├── task-list-template.md             # 标准模板
+│   │   └── maintenance-rule.md               # 会话末同步规则 + Stop hook 模板
 │   └── scripts/
 │       └── task_list_cli.py                  # 命令行工具
 ├── tests/

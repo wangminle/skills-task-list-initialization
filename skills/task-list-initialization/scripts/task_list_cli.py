@@ -18,6 +18,13 @@ STATUSES = {"待修复", "已修复", "待开发", "进行中", "已完成", "�
 COMPLETED_STATUSES = {"已修复", "已完成", "已关闭", "已解决"}
 PENDING_STATUSES = {"待修复", "待开发", "进行中"}
 
+# Maintenance-rule detection markers. Must stay in sync with references/maintenance-rule.md:
+# the canonical rule block always carries this heading; the Stop hook command always names
+# the tasklist reminder script. standardize uses these to report whether the maintenance
+# rule / hook are already installed in the target project (read-only detection).
+MAINTENANCE_RULE_MARKER = "会话结束任务同步"
+TASKLIST_HOOK_MARKER = "tasklist"
+
 
 @dataclass(frozen=True)
 class Section:
@@ -453,7 +460,51 @@ def classify_extension_recommendations(
     return recommendations
 
 
-def analyze_standardization(text: str, requested_profile: str, file_label: str) -> dict[str, object]:
+def detect_maintenance_rule(project_root: Path) -> dict[str, object]:
+    """Detect whether the session-end task-list sync rule and Stop hook are installed.
+
+    Read-only: scans the project root (parent of the target task-list.md) for the canonical
+    rule heading in CLAUDE.md / AGENTS.md and a tasklist Stop hook in .claude/settings.json.
+    standardize surfaces this so the agent can offer to install the maintenance rule when it
+    is missing — it never writes these files itself (installation follows maintenance-rule.md).
+    """
+    agent_file: str | None = None
+    for candidate in ("CLAUDE.md", "AGENTS.md"):
+        if (project_root / candidate).exists():
+            agent_file = candidate
+            break
+
+    rule_installed = False
+    if agent_file:
+        try:
+            text = (project_root / agent_file).read_text(encoding="utf-8")
+            rule_installed = MAINTENANCE_RULE_MARKER in text
+        except OSError:
+            rule_installed = False
+
+    hook_installed = False
+    settings_path = project_root / ".claude" / "settings.json"
+    if settings_path.exists():
+        try:
+            data = json.loads(settings_path.read_text(encoding="utf-8"))
+            for entry in data.get("hooks", {}).get("Stop", []):
+                for hook in entry.get("hooks", []):
+                    if TASKLIST_HOOK_MARKER in str(hook.get("command", "")):
+                        hook_installed = True
+                        break
+                if hook_installed:
+                    break
+        except (json.JSONDecodeError, OSError, AttributeError):
+            hook_installed = False
+
+    return {
+        "agent_file": agent_file,
+        "rule_installed": rule_installed,
+        "hook_installed": hook_installed,
+    }
+
+
+def analyze_standardization(text: str, requested_profile: str, file_label: str, project_root: Path) -> dict[str, object]:
     sections = parse_sections(text)
     records = collect_records(text)
     inferred = infer_profile(text, sections)
@@ -465,6 +516,7 @@ def analyze_standardization(text: str, requested_profile: str, file_label: str) 
     recommendations = classify_extension_recommendations(inferred, chosen, records, sections)
     auto_fixes = [f"可补齐缺失分区：{section.title}" for section in missing]
     headings = list(sections)
+    maintenance = detect_maintenance_rule(project_root)
     return {
         "file": file_label,
         "generated_at": local_minute_now(),
@@ -478,6 +530,7 @@ def analyze_standardization(text: str, requested_profile: str, file_label: str) 
         "quality_warnings": quality,
         "recommendations": recommendations,
         "auto_fix_candidates": auto_fixes,
+        "maintenance": maintenance,
     }
 
 
@@ -520,12 +573,41 @@ def render_markdown_report(report: dict[str, object], applied_fixes: list[str] |
             "",
             bullet(report["auto_fix_candidates"]),
             "",
+            "## 维护规则状态",
+            "",
+            "\n".join(render_maintenance_lines(report.get("maintenance") or {})),
+            "",
             "## 本次已执行修复",
             "",
             bullet(applied_fixes),
             "",
         ]
     )
+
+
+def render_maintenance_lines(status: dict[str, object]) -> list[str]:
+    """Render the maintenance-rule detection result as report bullets.
+
+    Detection is read-only and advisory: standardize never installs the rule itself.
+    The bullets tell the agent (and user) what is present and what to consider installing,
+    pointing at references/maintenance-rule.md for the install template.
+    """
+    agent_file = status.get("agent_file")
+    rule = bool(status.get("rule_installed"))
+    hook = bool(status.get("hook_installed"))
+    lines = [
+        f"- agent 文件：{agent_file or '未发现 CLAUDE.md / AGENTS.md'}",
+        f"- 会话结束同步规则：{'已安装' if rule else '未检测到'}",
+        f"- Stop hook 保证层：{'已安装' if hook else '未检测到（可选）'}",
+    ]
+    if not rule:
+        lines.append(
+            "- 建议：standardize 完成后询问用户是否安装「会话结束任务同步」规则（opt-in），"
+            "模板见 references/maintenance-rule.md。"
+        )
+    elif not hook:
+        lines.append("- 建议：规则已安装但未装 Stop hook；如需每次会话末强制触发可补装（可选）。")
+    return lines
 
 
 def migrate_legacy_schema(text: str) -> tuple[str, list[str]]:
@@ -761,6 +843,7 @@ def command_summary(args: argparse.Namespace) -> int:
 
 def command_standardize(args: argparse.Namespace) -> int:
     path = Path(args.file)
+    project_root = path.resolve().parent
     original_text = path.read_text(encoding="utf-8")
     working_text = original_text
     applied_fixes: list[str] = []
@@ -772,7 +855,7 @@ def command_standardize(args: argparse.Namespace) -> int:
         working_text, fixes = migrate_legacy_schema(working_text)
         applied_fixes.extend(fixes)
 
-    initial_report = analyze_standardization(working_text, args.profile, str(path))
+    initial_report = analyze_standardization(working_text, args.profile, str(path), project_root)
     chosen_profile = str(initial_report["recommended_profile"])
 
     if args.apply_safe_fixes:
@@ -790,7 +873,7 @@ def command_standardize(args: argparse.Namespace) -> int:
             path.write_text(working_text, encoding="utf-8")
     status_stream = sys.stderr if printed_preview else sys.stdout
 
-    report = analyze_standardization(working_text, args.profile, str(path))
+    report = analyze_standardization(working_text, args.profile, str(path), project_root)
     if args.format == "json":
         rendered = json.dumps({**report, "applied_fixes": applied_fixes}, ensure_ascii=False, indent=2) + "\n"
     else:

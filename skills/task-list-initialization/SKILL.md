@@ -85,6 +85,15 @@ Repair requires explicit flags:
 
 Do not automatically rename sections, move records between categories, or rewrite duplicate IDs without user approval. Those are semantic changes and should appear as report recommendations.
 
+### Maintenance-rule check
+
+Every `standardize` report includes a **维护规则状态** section (read-only detection). It reports whether the project already has:
+
+- the canonical **会话结束任务同步** rule in `CLAUDE.md` / `AGENTS.md`, and
+- the optional **Stop hook** in `.claude/settings.json`.
+
+When the rule is missing, ask the user whether they want future agents to keep the list updated. If they agree, install it exactly as in workflow step 5 — same template, same file-selection logic (`CLAUDE.md` > `AGENTS.md` > create `CLAUDE.md`), idempotent — using `references/maintenance-rule.md`. The CLI detects only; it never installs. When the rule is present but the Stop hook is not, offer the hook as an optional guarantee layer. Do not install anything without explicit user consent (opt-in).
+
 ## CLI
 
 Use `scripts/task_list_cli.py` for repeatable operations. On Windows, replace `python3` with `python`.

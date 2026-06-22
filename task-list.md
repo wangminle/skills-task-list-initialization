@@ -18,6 +18,8 @@
 | BUG-005 | 修复 | --date 对已完成状态不再回填完成时间（前一轮修复 --date 未完成项 bug 时引入的回归） | 2026-06-22 12:10 | 2026-06-22 12:10 | 已修复 | 仅完成态回填完成时间，对齐 legacy_completed_time；未完成仍为 -；新增 test_add_date_backfills_completed_time_for_completed_status |
 | BUG-006 | 修复 | 调研分区反向别名缺失：文件含 开源项目调研 时 add --section 调研事项 报未找到分区 | 2026-06-22 12:17 | 2026-06-22 12:17 | 已修复 | find_section_by_title 新增 SECTION_ALIASED_FROM 反向查找，使规范名命中文件中的旧标题（调研事项↔开源项目调研、文档维护↔文档事项等）；新增 2 个回归测试 |
 | BUG-007 | 修复 | insert_row 用精确字符串匹配标题，## 后多空格时 add 报未找到分区，与 parse_sections 的正则容忍不一致 | 2026-06-22 13:06 | 2026-06-22 13:06 | 已修复 | insert_row 改用 ^##\s+(.+?)\s*$ 正则匹配；新增 test_add_to_heading_with_irregular_whitespace；全部 18 测试通过 |
+| BUG-008 | 修复 | --date 同时作为发现/完成时间回退，导致待修复等未完成记录出现自相矛盾的完成时间 | 2026-06-22 13:30 | 2026-06-22 13:30 | 已修复 | completed_time 计算移除 or args.date；--date 仅回退发现时间（后续 BUG-005 进一步细化为完成态回填）；新增 test_add_date_does_not_seed_completed_time_for_incomplete |
+| BUG-009 | 修复 | standardize --dry-run 把修复后文件内容与诊断报告都打到 stdout，重定向会损坏文件 | 2026-06-22 13:30 | 2026-06-22 13:30 | 已修复 | dry-run 预览文件后，报告/摘要改走 stderr（status_stream）；新增 test_standardize_dry_run_stdout_is_only_file_content |
 
 ## 调整事项
 
@@ -43,6 +45,7 @@
 | TST-005 | 检查 | 为分区别名、development 别名、--fix-only 语义、--date 完成时间回填补充回归测试 | 2026-06-22 12:10 | 2026-06-22 12:10 | 已完成 | 新增 5 个测试（legacy 别名 add、development 别名、fix-only 不补齐、migrate+fix-only 不补齐、date 完成态回填）；python3 -m unittest 共 15 个测试全部通过 |
 | TST-006 | 检查 | 为调研/文档分区反向别名补充回归测试 | 2026-06-22 12:17 | 2026-06-22 12:17 | 已完成 | 新增 test_add_canonical_name_matches_legacy_research_heading、test_add_canonical_name_matches_legacy_doc_heading；python3 -m unittest 共 17 个测试全部通过 |
 | TST-007 | 检查 | 为标题空白容错补充回归测试 | 2026-06-22 13:06 | 2026-06-22 13:06 | 已完成 | test_add_to_heading_with_irregular_whitespace；python3 -m unittest 共 18 个测试全部通过 |
+| TST-008 | 检查 | 为 standardize 维护规则检测补充回归测试 | 2026-06-22 14:23 | 2026-06-22 14:23 | 已完成 | 4 个测试：缺失/规则+hook 齐全/仅规则缺 hook/JSON 输出；python3 -m unittest 共 22 个测试全部通过 |
 
 ## 文档维护
 
@@ -57,6 +60,8 @@
 | DOC-007 | 文档 | 创建 CLAUDE.md，写入会话结束任务同步规则与记录规范摘要 | 2026-06-22 12:50 | 2026-06-22 12:50 | 已完成 | CLAUDE.md 含必须遵守的会话末同步规则（写 task-list.md + 通知用户）与记录规范摘要；规则按 SKILL.md 工作流第 5 步落到 AGENTS/CLAUDE 等价文件 |
 | DOC-008 | 文档 | 新增 references/maintenance-rule.md 维护规则安装模板 | 2026-06-22 12:58 | 2026-06-22 12:58 | 已完成 | 含文件选择优先级、规则正文、可选 Stop hook（settings.json+脚本，session_id 守卫防死循环）、安装注意事项；SKILL.md References 同步登记 |
 | DOC-009 | 文档 | 同步 README 测试数量 17→18 并补充覆盖项描述 | 2026-06-22 13:06 | 2026-06-22 13:06 | 已完成 | badge、英文 Tested、中文经过测试、英中各一处测试结论；新增标题空白容错覆盖说明 |
+| DOC-010 | 文档 | 创建 README.md 双语文档（英文在上、中文在下、顶部语言切换） | 2026-06-22 13:30 | 2026-06-22 13:30 | 已完成 | 含概览/特性/标准/CLI/profiles/标准化/测试/结构/许可证；badge 与测试数随修复同步至 18 |
+| DOC-011 | 文档 | 同步维护规则检测文档：SKILL/standard/maintenance-rule/README 四处双语同步 | 2026-06-22 14:23 | 2026-06-22 14:23 | 已完成 | SKILL.md standardize 段新增 Maintenance-rule check；standard 报告表新增维护规则状态行；maintenance-rule.md 第 4 节标注检测标记与 CLI 常量同源；README badge/特性/标准化/结构树/测试数 22 双语同步 |
 
 ## 功能开发
 
@@ -68,9 +73,11 @@
 | DEV-004 | 开发 | 修复 CLI 分区别名解析、development 别名、--fix-only 语义、--date 完成时间回填 | 2026-06-22 12:10 | 2026-06-22 12:10 | 已完成 | task_list_cli.py 7 处改动（含移除 --project-root）；test_task_list_cli.py 新增 5 个回归测试；共 15 个测试通过 |
 | DEV-005 | 开发 | 调研/文档等分区反向别名机制，并收紧 --fix-only 文档表述 | 2026-06-22 12:17 | 2026-06-22 12:17 | 已完成 | 新增 SECTION_ALIASED_FROM 反向查找并接入 find_section_by_title；SKILL/standard/README 三处 --fix-only 表述统一为输出修饰；新增 2 个回归测试，共 17 个通过 |
 | DEV-006 | 开发 | 将维护规则安装补充为 skill 工作流第 5 步子任务 | 2026-06-22 12:58 | 2026-06-22 12:58 | 已完成 | SKILL.md 第 5 步从一句话扩展为：按 CLAUDE.md>AGENTS.md>新建 CLAUDE.md 优先级写入规则正文，可选装 Stop hook 保证层；指向 references/maintenance-rule.md |
+| DEV-007 | 开发 | standardize 增加「维护规则状态」检测分区：扫描项目根的 CLAUDE.md/AGENTS.md 标题与 .claude/settings.json 的 Stop hook，只读检测不安装 | 2026-06-22 14:23 | 2026-06-22 14:23 | 已完成 | 新增 detect_maintenance_rule/render_maintenance_lines；analyze_standardization 增 project_root 参数与 maintenance 字段；report 新增维护规则状态分区；JSON 格式自动携带 |
 
 ## 配置运维
 
 | ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- |
 | OPS-001 | 运维 | 配置 Stop hook 保证会话末任务同步时机 | 2026-06-22 12:50 | 2026-06-22 12:50 | 已完成 | .claude/settings.json 注册 Stop hook；hooks/tasklist_sync_reminder.sh 每会话首次停止注入 block 提醒，session_id 守卫防死循环；模拟 fresh/重复/缺 session_id 三场景通过 |
+| OPS-002 | 运维 | 裁剪 .gitignore 为项目精简规则并排除 docs/discussion | 2026-06-22 13:30 | 2026-06-22 13:30 | 已完成 | 移除无关 Web 框架条目；新增 macOS/IDE/Python/密钥/日志分类；排除 docs/discussion 参考工作流分析文档不入库 |

@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 import tempfile
@@ -368,6 +369,72 @@ class TaskListCliTest(unittest.TestCase):
             )
             self.assertIn("已追加：DOC-001", result.stdout)
             self.assertIn("| DOC-001 | 文档 | 文档A |", target.read_text(encoding="utf-8"))
+
+    def test_standardize_flags_missing_maintenance_rule(self):
+        # standardize must surface 维护规则状态 so the agent can offer to install the rule.
+        # Fresh project: no CLAUDE.md / AGENTS.md / settings.json → both 未检测到.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            result = self.run_cli("standardize", "--file", str(target))
+            self.assertIn("## 维护规则状态", result.stdout)
+            self.assertIn("agent 文件：未发现 CLAUDE.md / AGENTS.md", result.stdout)
+            self.assertIn("会话结束同步规则：未检测到", result.stdout)
+            self.assertIn("Stop hook 保证层：未检测到", result.stdout)
+            self.assertIn("询问用户是否安装", result.stdout)
+
+    def test_standardize_detects_installed_rule_and_hook(self):
+        # CLAUDE.md with the canonical heading + settings.json Stop hook → both 已安装.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            (Path(tmp) / "CLAUDE.md").write_text(
+                "## 会话结束任务同步（必须）\n\n规则正文略。\n", encoding="utf-8"
+            )
+            (Path(tmp) / ".claude").mkdir()
+            (Path(tmp) / ".claude" / "settings.json").write_text(
+                json.dumps({
+                    "hooks": {
+                        "Stop": [
+                            {"matcher": "", "hooks": [
+                                {"type": "command", "command": "bash .claude/hooks/tasklist_sync_reminder.sh"}
+                            ]}
+                        ]
+                    }
+                }),
+                encoding="utf-8",
+            )
+            result = self.run_cli("standardize", "--file", str(target))
+            self.assertIn("agent 文件：CLAUDE.md", result.stdout)
+            self.assertIn("会话结束同步规则：已安装", result.stdout)
+            self.assertIn("Stop hook 保证层：已安装", result.stdout)
+            self.assertNotIn("询问用户是否安装", result.stdout)
+
+    def test_standardize_rule_present_hook_missing_suggests_hook(self):
+        # Rule installed but no Stop hook → recommend the optional hook, not a full reinstall.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            (Path(tmp) / "AGENTS.md").write_text(
+                "## 会话结束任务同步\n\n规则正文略。\n", encoding="utf-8"
+            )
+            result = self.run_cli("standardize", "--file", str(target))
+            self.assertIn("agent 文件：AGENTS.md", result.stdout)
+            self.assertIn("会话结束同步规则：已安装", result.stdout)
+            self.assertIn("Stop hook 保证层：未检测到", result.stdout)
+            self.assertIn("规则已安装但未装 Stop hook", result.stdout)
+
+    def test_standardize_maintenance_section_in_json_report(self):
+        # JSON format must carry the maintenance status for programmatic consumers.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            result = self.run_cli("standardize", "--file", str(target), "--format", "json")
+            payload = json.loads(result.stdout)
+            self.assertIn("maintenance", payload)
+            self.assertEqual(payload["maintenance"]["agent_file"], None)
+            self.assertFalse(payload["maintenance"]["rule_installed"])
+            self.assertFalse(payload["maintenance"]["hook_installed"])
 
 
 if __name__ == "__main__":
