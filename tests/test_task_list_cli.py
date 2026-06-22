@@ -219,6 +219,136 @@ class TaskListCliTest(unittest.TestCase):
             # original file untouched in dry-run
             self.assertEqual(before, target.read_text(encoding="utf-8"))
 
+    def test_add_to_legacy_aliased_section_name(self):
+        # Regression: prefix_for_section must resolve SECTION_ALIASES, otherwise legacy
+        # section names like 开源项目调研 (→ 调研事项 / RES-) cannot accept new records.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 开源项目调研\n\n"
+                "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli(
+                "add", "--file", str(target), "--section", "开源项目调研",
+                "--action", "检查", "--description", "调研项A", "--status", "已完成",
+            )
+            self.assertIn("已追加：RES-001", result.stdout)
+            text = target.read_text(encoding="utf-8")
+            self.assertIn("| RES-001 | 检查 | 调研项A |", text)
+
+    def test_add_dev_alias_works_in_development_profile(self):
+        # Regression: on a development-profile file (which has 开发事项, not 功能开发),
+        # the 开发/功能 aliases must still resolve to the dev section.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target), "--profile", "development")
+            for alias in ("开发", "功能", "开发事项"):
+                self.run_cli(
+                    "add", "--file", str(target), "--section", alias,
+                    "--action", "开发", "--description", f"功能-{alias}",
+                    "--status", "待开发", "--priority", "P1", "--estimate", "2d",
+                )
+            text = target.read_text(encoding="utf-8")
+            # All three aliases land in 开发事项 with sequential DEV- IDs and 9 columns
+            self.assertIn("| DEV-001 | 开发 | 功能-开发 | P1 | 2d |", text)
+            self.assertIn("| DEV-002 | 开发 | 功能-功能 | P1 | 2d |", text)
+            self.assertIn("| DEV-003 | 开发 | 功能-开发事项 | P1 | 2d |", text)
+
+    def test_fix_only_does_not_apply_safe_fixes(self):
+        # Regression: --fix-only is an output modifier and must NOT add missing sections.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli("standardize", "--file", str(target), "--fix-only")
+            self.assertIn("修复完成", result.stdout)
+            text = target.read_text(encoding="utf-8")
+            self.assertNotIn("## 调整事项", text)
+            self.assertNotIn("## 配置运维", text)
+
+    def test_migrate_schema_fix_only_does_not_add_sections(self):
+        # Regression: --migrate-schema --fix-only migrates the schema but must NOT add
+        # missing sections (that requires --apply-safe-fixes).
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现日期 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | 旧bug | 2026-06-17 | 已修复 | ok |\n",
+                encoding="utf-8",
+            )
+            self.run_cli("standardize", "--file", str(target), "--migrate-schema", "--fix-only")
+            text = target.read_text(encoding="utf-8")
+            # schema migrated to 7 columns...
+            self.assertIn("| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |", text)
+            self.assertIn("| BUG-001 | 修复 | 旧bug | 2026-06-17 00:00 | 2026-06-17 00:00 | 已修复 | ok |", text)
+            # ...but no missing sections added
+            self.assertNotIn("## 调整事项", text)
+
+    def test_add_date_backfills_completed_time_for_completed_status(self):
+        # Regression: for completed statuses, --date backfills 完成时间 (consistent with
+        # the legacy single-date schema and legacy_completed_time); incomplete stays '-'.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "已完成bug",
+                "--date", "2026-06-17", "--status", "已修复",
+            )
+            text = target.read_text(encoding="utf-8")
+            self.assertIn(
+                "| BUG-001 | 修复 | 已完成bug | 2026-06-17 00:00 | 2026-06-17 00:00 | 已修复 | - |",
+                text,
+            )
+
+    def test_add_canonical_name_matches_legacy_research_heading(self):
+        # Symmetry: a file written with the legacy 开源项目调研 heading should accept a
+        # request for the canonical 调研事项 (reverse alias), mirroring 功能开发/开发事项.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 开源项目调研\n\n"
+                "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli(
+                "add", "--file", str(target), "--section", "调研事项",
+                "--action", "检查", "--description", "调研项B", "--status", "已完成",
+            )
+            self.assertIn("已追加：RES-001", result.stdout)
+            self.assertIn("| RES-001 | 检查 | 调研项B |", target.read_text(encoding="utf-8"))
+
+    def test_add_canonical_name_matches_legacy_doc_heading(self):
+        # The reverse-alias mechanism is general: 文档事项 in the file → 文档维护 request.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 文档事项\n\n"
+                "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli(
+                "add", "--file", str(target), "--section", "文档维护",
+                "--action", "文档", "--description", "文档A", "--status", "已完成",
+            )
+            self.assertIn("已追加：DOC-001", result.stdout)
+            self.assertIn("| DOC-001 | 文档 | 文档A |", target.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -132,7 +132,7 @@ python3 skills/task-list-initialization/scripts/task_list_cli.py standardize --f
 | --- | --- |
 | `--apply-safe-fixes` | 执行低风险修复，例如补齐缺失空分区 |
 | `--migrate-schema` | 将旧 `发现日期/完成日期/规划日期` 单日期列迁移为 `发现时间/完成时间` |
-| `--fix-only` | 只执行修复并输出摘要，不展开完整诊断报告 |
+| `--fix-only` | 输出修饰：仅打印修复摘要、不展开完整诊断报告；本身不触发修复，需配合 `--apply-safe-fixes` 或 `--migrate-schema` |
 
 标准化时应保留历史事实。不要为了贴合模板自动改写事项含义、移动记录、合并重复 ID 或重算摘要，除非用户明确批准。
 

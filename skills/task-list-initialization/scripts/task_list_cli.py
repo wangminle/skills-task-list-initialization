@@ -72,6 +72,14 @@ SECTION_ALIASES = {
     "开源项目调研": "调研事项",
 }
 
+# Reverse lookup of SECTION_ALIASES: canonical title → variant/legacy headings that alias
+# to it. Used by find_section_by_title so a file written with a legacy heading (e.g.
+# 开源项目调研 / 文档事项) still matches a request for the canonical name (调研事项 / 文档维护).
+SECTION_ALIASED_FROM: dict[str, list[str]] = {}
+for _legacy, _standard in SECTION_ALIASES.items():
+    if _legacy != _standard:
+        SECTION_ALIASED_FROM.setdefault(_standard, []).append(_legacy)
+
 
 def profile_sections(profile: str) -> list[Section]:
     sections = list(BASE_SECTIONS)
@@ -175,18 +183,33 @@ def expected_sections() -> dict[str, Section]:
 
 def find_section_by_title(title: str, sections: dict[str, dict[str, object]]) -> str:
     normalized = SECTION_ALIASES.get(title, title)
-    if normalized in sections:
-        return normalized
+    # Collect candidate headings that should all resolve to the same section:
+    #  1. the normalized title;
+    #  2. the dev profile counterpart (功能开发 ↔ 开发事项);
+    #  3. legacy/variant headings that alias to this target (reverse lookup), so a file
+    #     written with 开源项目调研 matches a request for 调研事项 (and 文档事项 → 文档维护).
+    candidates = [normalized]
+    if normalized == "功能开发":
+        candidates.append("开发事项")
+    elif normalized == "开发事项":
+        candidates.append("功能开发")
+    for variant in SECTION_ALIASED_FROM.get(normalized, []):
+        if variant not in candidates:
+            candidates.append(variant)
+    for candidate in candidates:
+        if candidate in sections:
+            return candidate
     if title in sections:
         return title
     raise SystemExit(f"未找到分区：{title}")
 
 
 def prefix_for_section(title: str, headers: list[str]) -> str:
-    known = expected_sections().get(title)
+    normalized = SECTION_ALIASES.get(title, title)
+    known = expected_sections().get(normalized)
     if known and known.prefix:
         return known.prefix
-    if title == "开发事项":
+    if normalized == "开发事项":
         return "DEV"
     raise SystemExit(f"无法推断分区 ID 前缀：{title}")
 
@@ -290,9 +313,13 @@ def command_add(args: argparse.Namespace) -> int:
     item_id = args.id or next_id(prefix, text)
     now = local_minute_now()
     found_time = normalize_time(args.found_time or args.date, now)
-    # --date is a legacy single-date fallback for 发现时间 only; it must not seed 完成时间,
-    # otherwise 未完成 records (待修复/待开发/进行中) get a self-contradictory completion date.
-    completed_time = normalize_time(args.completed_time, default_completed_time(args.status, now))
+    # --date is a legacy single-date fallback. It always seeds 发现时间; for 完成时间 it only
+    # backfills when the status is a completed state (mirroring legacy_completed_time), so
+    # 未完成 records keep 完成时间 = "-" instead of a self-contradictory date.
+    completed_value = args.completed_time
+    if not completed_value and args.status in COMPLETED_STATUSES:
+        completed_value = args.date
+    completed_time = normalize_time(completed_value, default_completed_time(args.status, now))
     description = args.description
     notes = args.notes or "-"
 
@@ -733,7 +760,9 @@ def command_standardize(args: argparse.Namespace) -> int:
     original_text = path.read_text(encoding="utf-8")
     working_text = original_text
     applied_fixes: list[str] = []
-    should_fix = args.apply_safe_fixes or args.migrate_schema or args.fix_only
+    # --fix-only is an output modifier (summary instead of full report); it does not itself
+    # trigger fixes. Repairs run only with --apply-safe-fixes or --migrate-schema.
+    should_fix = args.apply_safe_fixes or args.migrate_schema
 
     if args.migrate_schema:
         working_text, fixes = migrate_legacy_schema(working_text)
@@ -742,7 +771,7 @@ def command_standardize(args: argparse.Namespace) -> int:
     initial_report = analyze_standardization(working_text, args.profile, str(path))
     chosen_profile = str(initial_report["recommended_profile"])
 
-    if args.apply_safe_fixes or args.fix_only:
+    if args.apply_safe_fixes:
         working_text, fixes = add_missing_sections(working_text, chosen_profile)
         applied_fixes.extend(fixes)
 
@@ -809,7 +838,7 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--notes", default="-", help="备注")
     add.add_argument("--found-time", help="发现时间，格式 YYYY-MM-DD HH:MM，默认当前本地时间")
     add.add_argument("--completed-time", help="完成时间，格式 YYYY-MM-DD HH:MM；未完成可填 -")
-    add.add_argument("--date", help="兼容旧参数；YYYY-MM-DD 会转换为 YYYY-MM-DD 00:00")
+    add.add_argument("--date", help="兼容旧参数（旧单日期 schema）；回退填充发现时间，且仅在状态为完成态时回填完成时间，否则为 -")
     add.add_argument("--id", help="显式指定 ID，默认自动分配")
     add.add_argument("--priority", help="开发事项优先级，默认 P2")
     add.add_argument("--estimate", help="开发事项预计时间")
@@ -828,7 +857,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     standardize = sub.add_parser("standardize", help="诊断并可选规范化已有 task-list.md")
     standardize.add_argument("--file", default="task-list.md", help="目标 task-list.md")
-    standardize.add_argument("--project-root", default=".", help="项目根目录，用于报告上下文")
     standardize.add_argument(
         "--profile",
         choices=["auto", "minimal", "planning", "extended", "development"],
@@ -839,7 +867,7 @@ def build_parser() -> argparse.ArgumentParser:
     standardize.add_argument("--format", choices=["markdown", "json"], default="markdown", help="报告格式")
     standardize.add_argument("--apply-safe-fixes", action="store_true", help="执行低风险修复，如补齐缺失空分区")
     standardize.add_argument("--migrate-schema", action="store_true", help="迁移旧日期列 schema 到发现时间/完成时间 schema")
-    standardize.add_argument("--fix-only", action="store_true", help="只执行修复摘要输出；不展开完整报告")
+    standardize.add_argument("--fix-only", action="store_true", help="只输出修复摘要而不展开完整报告；需配合 --apply-safe-fixes 或 --migrate-schema 使用")
     standardize.add_argument("--dry-run", action="store_true", help="打印修复后的文件内容，不写回")
     standardize.set_defaults(func=command_standardize)
     return parser

@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-8%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-17%20passing-brightgreen.svg)](tests/)
 
 ---
 
@@ -22,7 +22,7 @@ Every project accumulates bugs, features, reviews, tests, docs, and ops work. Th
 - **CLI tooling** — generate, append, validate, summarize, and standardize via `task_list_cli.py`.
 - **Report-first standardization** — diagnoses before it edits; repairs only with explicit flags.
 - **Schema migration** — upgrades legacy single-date columns to the 发现时间 / 完成时间 model.
-- **Tested** — 8 unit tests covering init, add, check, summary, and standardize.
+- **Tested** — 17 unit tests covering init, add, check, summary, standardize, aliases, reverse aliases, and `--fix-only` semantics.
 
 ### The Task List Standard
 
@@ -127,7 +127,7 @@ Pick the smallest variant that fits. `development` is intended only when priorit
 | --- | --- |
 | `--apply-safe-fixes` | Low-risk fixes, e.g. add missing empty sections |
 | `--migrate-schema` | Migrate legacy single-date columns to 发现时间 / 完成时间 |
-| `--fix-only` | Run fixes and print a repair summary, skip the full report |
+| `--fix-only` | Output modifier — print only a repair summary; pair with `--apply-safe-fixes` or `--migrate-schema` |
 
 It will not rename sections, move records, or rewrite duplicate IDs without your approval — those are semantic changes and appear as report recommendations.
 
@@ -137,7 +137,7 @@ It will not rename sections, move records, or rewrite duplicate IDs without your
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-8 tests, all passing.
+17 tests, all passing.
 
 ### Project Structure
 
@@ -177,7 +177,7 @@ skills-task-list-initialization/
 - **命令行工具**——通过 `task_list_cli.py` 完成生成、追加、校验、统计与标准化。
 - **先诊断后修复**——默认只生成报告，必须显式开启参数才会改写文件。
 - **结构迁移**——把旧的单日期列迁移到「发现时间 / 完成时间」。
-- **经过测试**——8 个单元测试，覆盖 init、add、check、summary、standardize。
+- **经过测试**——17 个单元测试，覆盖 init、add、check、summary、standardize、分区别名、反向别名与 `--fix-only` 语义。
 
 ### 任务清单标准
 
@@ -280,7 +280,7 @@ python3 skills/task-list-initialization/scripts/task_list_cli.py standardize \
 | --- | --- |
 | `--apply-safe-fixes` | 低风险修复，如补齐缺失空分区 |
 | `--migrate-schema` | 迁移旧单日期列为「发现时间 / 完成时间」 |
-| `--fix-only` | 只执行修复并输出摘要，不展开完整报告 |
+| `--fix-only` | 输出修饰：仅打印修复摘要；需配合 `--apply-safe-fixes` 或 `--migrate-schema` |
 
 未经你同意，它不会重命名章节、移动记录或重写重复 ID——这些属于语义变更，只会作为报告建议出现。
 
@@ -290,7 +290,7 @@ python3 skills/task-list-initialization/scripts/task_list_cli.py standardize \
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-8 个测试，全部通过。
+17 个测试，全部通过。
 
 ### 项目结构
 

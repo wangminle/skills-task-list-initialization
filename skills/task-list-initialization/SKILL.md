@@ -81,7 +81,7 @@ Repair requires explicit flags:
 
 - `--apply-safe-fixes`: apply low-risk fixes such as adding missing empty standard sections.
 - `--migrate-schema`: migrate legacy single-date schemas to `发现时间 / 完成时间`.
-- `--fix-only`: perform requested fixes and print a repair summary without expanding the full report.
+- `--fix-only`: output modifier — print only a repair summary (no full report); it does not trigger fixes itself, so pair it with `--apply-safe-fixes` or `--migrate-schema`.
 
 Do not automatically rename sections, move records between categories, or rewrite duplicate IDs without user approval. Those are semantic changes and should appear as report recommendations.
 
