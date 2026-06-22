@@ -267,8 +267,12 @@ def table_line(cells: list[str]) -> str:
 def insert_row(text: str, section_title: str, row: list[str]) -> str:
     lines = text.splitlines()
     heading_index = None
+    # Match headings with the same tolerance as parse_sections (^##\s+(.+?)\s*$) so that
+    # irregular heading whitespace (e.g. "##   代码 Bug") still resolves; an exact-string
+    # compare here would reject headings that detection elsewhere accepts.
     for index, line in enumerate(lines):
-        if line.strip() == f"## {section_title}":
+        heading = re.match(r"^##\s+(.+?)\s*$", line)
+        if heading and heading.group(1) == section_title:
             heading_index = index
             break
     if heading_index is None:

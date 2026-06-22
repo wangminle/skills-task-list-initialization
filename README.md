@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-17%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-18%20passing-brightgreen.svg)](tests/)
 
 ---
 
@@ -22,7 +22,7 @@ Every project accumulates bugs, features, reviews, tests, docs, and ops work. Th
 - **CLI tooling** — generate, append, validate, summarize, and standardize via `task_list_cli.py`.
 - **Report-first standardization** — diagnoses before it edits; repairs only with explicit flags.
 - **Schema migration** — upgrades legacy single-date columns to the 发现时间 / 完成时间 model.
-- **Tested** — 17 unit tests covering init, add, check, summary, standardize, aliases, reverse aliases, and `--fix-only` semantics.
+- **Tested** — 18 unit tests covering init, add, check, summary, standardize, aliases, reverse aliases, heading-whitespace tolerance, and `--fix-only` semantics.
 
 ### The Task List Standard
 
@@ -137,7 +137,7 @@ It will not rename sections, move records, or rewrite duplicate IDs without your
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-17 tests, all passing.
+18 tests, all passing.
 
 ### Project Structure
 
@@ -177,7 +177,7 @@ skills-task-list-initialization/
 - **命令行工具**——通过 `task_list_cli.py` 完成生成、追加、校验、统计与标准化。
 - **先诊断后修复**——默认只生成报告，必须显式开启参数才会改写文件。
 - **结构迁移**——把旧的单日期列迁移到「发现时间 / 完成时间」。
-- **经过测试**——17 个单元测试，覆盖 init、add、check、summary、standardize、分区别名、反向别名与 `--fix-only` 语义。
+- **经过测试**——18 个单元测试，覆盖 init、add、check、summary、standardize、分区别名、反向别名、标题空白容错与 `--fix-only` 语义。
 
 ### 任务清单标准
 
@@ -290,7 +290,7 @@ python3 skills/task-list-initialization/scripts/task_list_cli.py standardize \
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-17 个测试，全部通过。
+18 个测试，全部通过。
 
 ### 项目结构
 

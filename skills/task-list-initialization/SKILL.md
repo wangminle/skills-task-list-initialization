@@ -17,7 +17,7 @@ The default model is intentionally small: a fixed header, task-type sections, an
 2. If no task list exists, create one from the standard template.
 3. If a task list exists, preserve records and normalize only with user approval.
 4. Use the standard categories and 7-column table unless project evidence calls for extensions.
-5. Add maintenance rules to `AGENTS.md` or equivalent when the user wants future agents to keep the list updated.
+5. When the user wants future agents to keep the list updated, install maintenance rules (opt-in): write the canonical session-end sync rule into the project's agent file — `CLAUDE.md` if it exists, else `AGENTS.md`, else create `CLAUDE.md` — and optionally add the `Stop` hook for a reliable "every session" guarantee. Use the template and file-selection logic in `references/maintenance-rule.md`.
 6. Validate duplicate IDs, broken table rows, unsupported actions/statuses, and summary drift before finishing.
 7. For a task list that has been used for a while, use `standardize` first. It defaults to diagnostics and reporting only; run repair only when the user explicitly asks for it or passes repair flags.
 
@@ -108,3 +108,4 @@ Run `--help` for all options. Prefer CLI generation for new files, then review t
 
 - `references/task-list-standard.md`: four-project summary, common rules, differences, risks, and maintenance guidance.
 - `references/task-list-template.md`: canonical Markdown templates for each profile.
+- `references/maintenance-rule.md`: canonical maintenance-rule text, file-selection logic, and optional `Stop`-hook guarantee layer for installing into a project's `CLAUDE.md`/`AGENTS.md`.

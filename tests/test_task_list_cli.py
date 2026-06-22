@@ -331,6 +331,26 @@ class TaskListCliTest(unittest.TestCase):
             self.assertIn("已追加：RES-001", result.stdout)
             self.assertIn("| RES-001 | 检查 | 调研项B |", target.read_text(encoding="utf-8"))
 
+    def test_add_to_heading_with_irregular_whitespace(self):
+        # Regression: insert_row must match headings with the same tolerance as
+        # parse_sections (^##\s+...). A heading like "##   代码 Bug" (multiple spaces)
+        # is detected by check/summary but used to fail add with "未找到分区".
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "##   代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "空格标题bug", "--status", "待修复",
+            )
+            self.assertIn("已追加：BUG-001", result.stdout)
+            self.assertIn("| BUG-001 | 修复 | 空格标题bug |", target.read_text(encoding="utf-8"))
+
     def test_add_canonical_name_matches_legacy_doc_heading(self):
         # The reverse-alias mechanism is general: 文档事项 in the file → 文档维护 request.
         with tempfile.TemporaryDirectory() as tmp:
