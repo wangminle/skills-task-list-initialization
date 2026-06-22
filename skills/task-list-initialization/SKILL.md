@@ -14,10 +14,10 @@ The default model is intentionally small: a fixed header, task-type sections, an
 ## Workflow
 
 1. Inspect the project for `task-list.md`, `AGENTS.md`, `CLAUDE.md`, planning docs, changelogs, and existing issue notes.
-2. If no task list exists, create one from the standard template.
+2. If no task list exists, create one from the standard template **in the user's language** (see Language below).
 3. If a task list exists, preserve records and normalize only with user approval.
 4. Use the standard categories and 7-column table unless project evidence calls for extensions.
-5. When the user wants future agents to keep the list updated, install maintenance rules (opt-in): write the canonical session-end sync rule into the project's agent file — `CLAUDE.md` if it exists, else `AGENTS.md`, else create `CLAUDE.md` — and optionally add the `Stop` hook for a reliable "every session" guarantee. Use the template and file-selection logic in `references/maintenance-rule.md`.
+5. When the user wants future agents to keep the list updated, install maintenance rules (opt-in): write the canonical session-end sync rule into the project's agent file — `CLAUDE.md` if it exists, else `AGENTS.md`, else create `CLAUDE.md` — and optionally add the `Stop` hook for a reliable "every session" guarantee. Match the rule text and hook message to the task-list's language. Use the template and file-selection logic in `references/maintenance-rule.md`.
 6. Validate duplicate IDs, broken table rows, unsupported actions/statuses, and summary drift before finishing.
 7. For a task list that has been used for a while, use `standardize` first. It defaults to diagnostics and reporting only; run repair only when the user explicitly asks for it or passes repair flags.
 
@@ -67,6 +67,18 @@ Choose the smallest variant that fits:
 
 Use `development` only when priority and effort estimates are actually useful. The four reference projects showed that forcing the extended development table onto every project adds maintenance cost.
 
+## Language
+
+The task-list comes in two languages: Chinese (Simplified, `zh`) and English (`en`). Pick the language by the one the user is interacting in:
+
+- **Chinese** interaction → Chinese task-list (`init --lang zh`, the default).
+- **Any other language** → tell the user you will produce an English task-list, then create it (`init --lang en`).
+- **Cannot determine** the language → default to Chinese (`zh`).
+
+The English task-list is a faithful translation of the Chinese one: same sections, same ID prefixes (`BUG-`/`ADJ-`/…), same 7-column model — only the labels differ (section titles, column headers, action/status enums, header notes). Existing files are handled by auto-detection: `add`/`check`/`summary`/`standardize` sniff the file's language from its structural markers (title and section headings) and validate against the matching locale, so they take no `--lang` flag.
+
+When installing the maintenance rule (workflow step 5, or the standardize maintenance check), match the rule text and Stop-hook message to the task-list's language — see `references/maintenance-rule.md`.
+
 ## Standardizing Existing Lists
 
 Use `standardize` when an existing `task-list.md` needs review, cleanup planning, or cautious normalization. This mode is intentionally analytical first: it checks structure, record completeness, classification clarity, and whether the file should remain minimal or use `planning`, `extended`, or `development`.
@@ -80,10 +92,14 @@ python3 skills/task-list-initialization/scripts/task_list_cli.py standardize --f
 Repair requires explicit flags:
 
 - `--apply-safe-fixes`: apply low-risk fixes such as adding missing empty standard sections.
-- `--migrate-schema`: migrate legacy single-date schemas to `发现时间 / 完成时间`.
+- `--migrate-schema`: migrate legacy single-date schemas to `发现时间 / 完成时间`. Data rows whose cell count doesn't match the header (usually an unescaped `|` in a cell) are left untouched and reported as `migrate_warnings` (in `--fix-only` and `--format json` output) instead of being silently skipped.
 - `--fix-only`: output modifier — print only a repair summary (no full report); it does not trigger fixes itself, so pair it with `--apply-safe-fixes` or `--migrate-schema`.
 
 Do not automatically rename sections, move records between categories, or rewrite duplicate IDs without user approval. Those are semantic changes and should appear as report recommendations.
+
+**Schema variants.** A project may legitimately keep the legacy **single-date schema** (`ID/动作/事项/完成日期/状态/备注`, 6-col; or 8-col dev) and not migrate to the canonical dual-date model. `check`/`standardize` auto-detect which schema a file uses and validate against it (`--schema auto|dual|single`, default `auto`), so a single-date file in good shape passes instead of being flagged on every section. When the schema is single-date, the report notes that `--migrate-schema` can upgrade it (opt-in, requires approval). Do not force a migration just because the schema differs from the default. `add` detects the target section's schema too and appends a row with the matching column count (single-date 6-col, dual-date 7-col, or dev 8/9-col), so it works on a single-date file without hand-writing the row.
+
+**Duplicate IDs.** When the report finds duplicate IDs, prefer adding `ADJ-` records that document the old→new ID mapping over silently renumbering — this keeps historical references traceable. The actual cleanup (renumber, merge, or leave as-is) still requires explicit user approval.
 
 ### Maintenance-rule check
 
@@ -100,7 +116,7 @@ Use `scripts/task_list_cli.py` for repeatable operations. On Windows, replace `p
 
 ```bash
 python3 skills/task-list-initialization/scripts/task_list_cli.py init --output task-list.md
-python3 skills/task-list-initialization/scripts/task_list_cli.py init --profile extended --with-summary --output task-list.md
+python3 skills/task-list-initialization/scripts/task_list_cli.py init --lang en --profile extended --with-summary --output task-list.md
 python3 skills/task-list-initialization/scripts/task_list_cli.py add --file task-list.md --section "代码 Bug" --action 修复 --description "登录失败" --status 待修复 --notes "复现于本地"
 python3 skills/task-list-initialization/scripts/task_list_cli.py check --file task-list.md
 python3 skills/task-list-initialization/scripts/task_list_cli.py summary --file task-list.md
@@ -108,6 +124,8 @@ python3 skills/task-list-initialization/scripts/task_list_cli.py summary --file 
 python3 skills/task-list-initialization/scripts/task_list_cli.py standardize --file task-list.md --report docs/task-list-standardize-report.md
 python3 skills/task-list-initialization/scripts/task_list_cli.py standardize --file task-list.md --migrate-schema --apply-safe-fixes
 ```
+
+`init --lang {zh,en}` selects the template language (`zh` = Simplified Chinese, default; `en` = English). The other subcommands auto-detect the language from the target file. `check`/`standardize` accept `--schema {auto,dual,single}` (default `auto`) to validate a file that keeps the legacy single-date schema. `add` auto-matches the target section's schema and emits the corresponding column count, so no flag is needed.
 
 Run `--help` for all options. Prefer CLI generation for new files, then review the result manually for project-specific wording.
 
@@ -117,4 +135,4 @@ Run `--help` for all options. Prefer CLI generation for new files, then review t
 
 - `references/task-list-standard.md`: four-project summary, common rules, differences, risks, and maintenance guidance.
 - `references/task-list-template.md`: canonical Markdown templates for each profile.
-- `references/maintenance-rule.md`: canonical maintenance-rule text, file-selection logic, and optional `Stop`-hook guarantee layer for installing into a project's `CLAUDE.md`/`AGENTS.md`.
+- `references/maintenance-rule.md`: canonical maintenance-rule text (Chinese and English), file-selection logic, language-matching guidance, and optional `Stop`-hook guarantee layer for installing into a project's `CLAUDE.md`/`AGENTS.md`.

@@ -21,11 +21,15 @@
 | BUG-008 | 修复 | --date 同时作为发现/完成时间回退，导致待修复等未完成记录出现自相矛盾的完成时间 | 2026-06-22 13:30 | 2026-06-22 13:30 | 已修复 | completed_time 计算移除 or args.date；--date 仅回退发现时间（后续 BUG-005 进一步细化为完成态回填）；新增 test_add_date_does_not_seed_completed_time_for_incomplete |
 | BUG-009 | 修复 | standardize --dry-run 把修复后文件内容与诊断报告都打到 stdout，重定向会损坏文件 | 2026-06-22 13:30 | 2026-06-22 13:30 | 已修复 | dry-run 预览文件后，报告/摘要改走 stderr（status_stream）；新增 test_standardize_dry_run_stdout_is_only_file_content |
 | BUG-010 | 修复 | 维护规则检测在 CLAUDE.md 与 AGENTS.md 同时存在时 false negative：规则仅在 AGENTS.md 时命中 CLAUDE.md 即 break，误报未检测到并建议重复安装 | 2026-06-22 14:50 | 2026-06-22 14:50 | 已修复 | detect_maintenance_rule 改为扫描两个文件，contaming 列表优先返回 CLAUDE.md；未安装时回落到首选现有文件作为安装目标；新增 3 个回归测试（仅 AGENTS/双文件/均无），共 25 测试通过 |
+| BUG-011 | 修复 | split_cells 与 escape_cell 转义不幂等：migrate 重建行时把备注里已转义的竖线双重转义成 \\\|，导致该行被解析成 9 列（另一项目迁移 CHK-006/DOC-005 时实测触发） | 2026-06-22 17:51 | 2026-06-22 17:51 | 已修复 | split_cells 改为解码转义竖线为逻辑值（解析器应解码而非保留语法），escape_cell 写回再编码，二者互逆、往返幂等；二次 migrate 零变更；新增幂等回归测试 |
+| BUG-012 | 修复 | standardize --migrate-schema 静默跳过列数异常行：表头迁移后，破损数据行被原样漏下且不计入告警 | 2026-06-22 18:10 | 2026-06-22 18:10 | 已修复 | 根因：migrate_legacy_schema 的 fallthrough 分支对「活跃迁移上下文 + 数据行 + 列数与 legacy 表头不符」直接 append 不告警。真实命中：某项目迁移报「修复完成：12 项」却漏掉两行单元格内未转义的 JS \|\| 的记录，靠后续 check 才发现。修复：fallthrough 前记 migrate_skip 告警（ID + 行号 + legacy 列数 + 实际列数），随第三返回值 warnings 返回，在 --fix-only 摘要、--format json、报告三处暴露。与 BUG-011（转义幂等）、DEV-009（schema 变体）同属 migrate 路径的真实脏数据兜底。 |
+| BUG-013 | 修复 | command_add 不识别单日期 schema，向 6 列表追加 7 列行导致列数异常 | 2026-06-22 18:12 | 2026-06-22 18:12 | 已修复 | command_add 按表头匹配 dual/single/dev 变体并生成对应列数；新增 single_date_cell 辅助函数与 test_add_to_single_date_schema；record_quality_warnings 改为 len(cells)<6 以覆盖单日期记录 |
 
 ## 调整事项
 
 | ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- |
+| ADJ-001 | 调整 | README 测试数量文案不一致（badge 38、正文 36/38 混用） | 2026-06-22 18:12 | 2026-06-22 18:12 | 已完成 | 统一为 39（含新增单日期 add 回归测试） |
 
 ## 检查事项
 
@@ -48,6 +52,10 @@
 | TST-007 | 检查 | 为标题空白容错补充回归测试 | 2026-06-22 13:06 | 2026-06-22 13:06 | 已完成 | test_add_to_heading_with_irregular_whitespace；python3 -m unittest 共 18 个测试全部通过 |
 | TST-008 | 检查 | 为 standardize 维护规则检测补充回归测试 | 2026-06-22 14:23 | 2026-06-22 14:23 | 已完成 | 4 个测试：缺失/规则+hook 齐全/仅规则缺 hook/JSON 输出；python3 -m unittest 共 22 个测试全部通过 |
 | TST-009 | 检查 | 为双 agent 文件维护规则检测补充回归测试 | 2026-06-22 14:50 | 2026-06-22 14:50 | 已完成 | 3 个测试：两文件均在但规则仅在 AGENTS.md（核心回归）/两文件均含规则优先 CLAUDE.md/两文件均无规则回落 CLAUDE.md 目标；python3 -m unittest 共 25 个测试全部通过 |
+| TST-010 | 检查 | 为中英双语支持补充回归测试 | 2026-06-22 17:13 | 2026-06-22 17:13 | 已完成 | 6 个测试：init --lang en/默认中文/add 英文分区自动检测/check 英文枚举校验/standardize 英文报告/summary 英文回写；python3 -m unittest 共 31 个测试全部通过 |
+| TST-011 | 检查 | 为日期 schema 变体检测与重复 ID 映射建议补充回归测试 | 2026-06-22 17:40 | 2026-06-22 17:40 | 已完成 | 5 个测试：check 接受单日期 schema/check --schema single 强制/standardize 单日期升级建议且不报表头不一致/standardize 重复 ID 建议 ADJ 映射/JSON 含 schema 字段；python3 -m unittest 共 36 个测试全部通过 |
+| TST-012 | 检查 | 为转义竖线 migrate 幂等性补充回归测试 | 2026-06-22 17:52 | 2026-06-22 17:52 | 已完成 | 6 列含转义竖线备注 migrate 后保留单层转义、二次 migrate 无变更、无 9 列异常；python3 -m unittest 共 37 个测试全部通过 |
+| TST-013 | 检查 | migrate 跳行告警回归测试 test_migrate_warns_on_skipped_malformed_row | 2026-06-22 18:10 | 2026-06-22 18:10 | 已完成 | 断言 --migrate-schema --fix-only 输出含「ID + 第 N 行 + 实际 X 列 + legacy 表头 Y 列」的跳行告警，且 --format json 的 migrate_warnings 非空；干净文件无误报。全套 38 通过（37 增至 38）。 |
 
 ## 文档维护
 
@@ -64,6 +72,11 @@
 | DOC-009 | 文档 | 同步 README 测试数量 17→18 并补充覆盖项描述 | 2026-06-22 13:06 | 2026-06-22 13:06 | 已完成 | badge、英文 Tested、中文经过测试、英中各一处测试结论；新增标题空白容错覆盖说明 |
 | DOC-010 | 文档 | 创建 README.md 双语文档（英文在上、中文在下、顶部语言切换） | 2026-06-22 13:30 | 2026-06-22 13:30 | 已完成 | 含概览/特性/标准/CLI/profiles/标准化/测试/结构/许可证；badge 与测试数随修复同步至 18 |
 | DOC-011 | 文档 | 同步维护规则检测文档：SKILL/standard/maintenance-rule/README 四处双语同步 | 2026-06-22 14:23 | 2026-06-22 14:23 | 已完成 | SKILL.md standardize 段新增 Maintenance-rule check；standard 报告表新增维护规则状态行；maintenance-rule.md 第 4 节标注检测标记与 CLI 常量同源；README badge/特性/标准化/结构树/测试数 22 双语同步 |
+| DOC-012 | 文档 | 同步双语能力文档：SKILL/standard/template/maintenance-rule/README 五处双语 | 2026-06-22 17:13 | 2026-06-22 17:13 | 已完成 | SKILL.md 新增 Language 段+工作流语言步骤+--lang 示例；task-list-standard.md 新增语言版本映射表；task-list-template.md 新增 English templates；maintenance-rule.md 改为双语（规则正文/hook reason 中英二选一+语言选择说明）；README 双语特性/--lang/测试数 31 |
+| DOC-013 | 文档 | 同步日期 schema 变体与重复 ID 建议文档：README/SKILL/standard 三处双语 | 2026-06-22 17:40 | 2026-06-22 17:40 | 已完成 | README 增 schema 变体特性、--schema 示例、测试数 36、标准化段双注；SKILL.md Standardizing 增 schema 变体与重复 ID 两段、CLI 增 --schema；task-list-standard.md 报告维度增日期 schema 变体行、新增日期 schema 变体小节 |
+| DOC-014 | 文档 | migrate 跳行告警的文档同步：README 中英文 + task-list-standard.md | 2026-06-22 18:10 | 2026-06-22 18:10 | 已完成 | README 测试徽标 36 改 38、中英文 schema 变体段补充 migrate_warnings 行为说明；task-list-standard.md 的 --migrate-schema 表后补「跳行告警语义 + 先手工转义再重跑」处理建议。 |
+| DOC-015 | 文档 | 文档同步至最新 CLI 能力：add 的 schema 自动识别、migrate 跳行告警 | 2026-06-22 18:21 | 2026-06-22 18:21 | 已完成 | 补齐 BUG-013（add 单日期）与 BUG-012（migrate 跳行告警）的文档缺口：SKILL.md 的 --migrate-schema 条补 migrate_warnings 跳行语义、Schema variants 段与 CLI 段补 add 按分区 schema 输出对应列数；README 中英文特性列表与 CLI 段同步 add schema 说明；task-list-standard.md 日期 schema 变体段补 add 行为条目（含 --date 填充规则）。 |
+| DOC-016 | 文档 | README 英文段改用英文 schema 标签，与 init --lang en 产物一致 | 2026-06-22 18:44 | 2026-06-22 18:44 | 已完成 | 双语支持后英文段仍用中文标签（代码 Bug/修复/待修复）且含已失效的 intentionally Chinese 说明，与 init --lang en 生成的全英文文件矛盾。改：表头/字段表/分区表/动作枚举/状态/profiles/migrate 目标列/add 示例全部转英文（取自 _EN locale 权威值 Bugs/Adjustments/Reviews/.../Fix/Develop/.../Pending Fix/Fixed/...）；intentionally Chinese 改为 localization 说明（前缀与列模型跨语言一致，仅标签不同，指向 bilingual 表）。中文段不动；英文 add 示例已 e2e 验证可跑通。 |
 
 ## 功能开发
 
@@ -76,6 +89,9 @@
 | DEV-005 | 开发 | 调研/文档等分区反向别名机制，并收紧 --fix-only 文档表述 | 2026-06-22 12:17 | 2026-06-22 12:17 | 已完成 | 新增 SECTION_ALIASED_FROM 反向查找并接入 find_section_by_title；SKILL/standard/README 三处 --fix-only 表述统一为输出修饰；新增 2 个回归测试，共 17 个通过 |
 | DEV-006 | 开发 | 将维护规则安装补充为 skill 工作流第 5 步子任务 | 2026-06-22 12:58 | 2026-06-22 12:58 | 已完成 | SKILL.md 第 5 步从一句话扩展为：按 CLAUDE.md>AGENTS.md>新建 CLAUDE.md 优先级写入规则正文，可选装 Stop hook 保证层；指向 references/maintenance-rule.md |
 | DEV-007 | 开发 | standardize 增加「维护规则状态」检测分区：扫描项目根的 CLAUDE.md/AGENTS.md 标题与 .claude/settings.json 的 Stop hook，只读检测不安装 | 2026-06-22 14:23 | 2026-06-22 14:23 | 已完成 | 新增 detect_maintenance_rule/render_maintenance_lines；analyze_standardization 增 project_root 参数与 maintenance 字段；report 新增维护规则状态分区；JSON 格式自动携带 |
+| DEV-008 | 开发 | task-list 支持中英双语：init --lang zh\|en 选择语言（默认中文简体），英文为中文忠实翻译；add/check/summary/standardize 按文件结构自动检测语言 | 2026-06-22 17:13 | 2026-06-22 17:13 | 已完成 | CLI 重构为 Locale 驱动（_ZH/_EN 两套 schema+T 文案表）；新增 detect_locale/get_locale；init 增 --lang；英文分区/列/动作/状态/报告/摘要全量翻译；ID 前缀跨语言一致；英文维护规则标记 Session-end Task Sync 接入检测 |
+| DEV-009 | 开发 | check/standardize 支持日期 schema 变体：自动识别双日期(发现时间+完成时间)与合法单日期(完成日期 6列/8列dev)，按文件实际 schema 校验，单日期好文件不再全量报表头不一致 | 2026-06-22 17:39 | 2026-06-22 17:39 | 已完成 | 新增 detect_schema/to_single_date_columns；check_text 与 analyze_standardization 增 schema 参数；check/standardize 增 --schema auto\|dual\|single(默认auto)；报告 schema 字段+单日期升级提示 |
+| DEV-010 | 开发 | standardize 检测到重复 ID 时建议新增 ADJ- 记录说明旧号→新号映射，避免静默重编号导致历史引用断裂 | 2026-06-22 17:40 | 2026-06-22 17:40 | 已完成 | analyze_standardization 增 rec_dup_id_mapping；report-only 不自动改号，清理仍需用户批准；对应 standard 常见问题表既有规则，工具现主动提示 |
 
 ## 配置运维
 

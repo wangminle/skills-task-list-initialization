@@ -120,6 +120,7 @@ python3 skills/task-list-initialization/scripts/task_list_cli.py standardize --f
 | 维度 | 检查内容 |
 | --- | --- |
 | 结构合规 | 重复 ID、重复章节、坏表格行、动作/状态枚举、表头是否符合当前 7 列时间模型 |
+| 日期 schema 变体 | 文件用双日期（`发现时间/完成时间`）还是合法的单日期（`完成日期`，6 列）；按文件实际 schema 校验，单日期好文件应通过而非全量报表头不一致 |
 | 记录完整性 | 备注是否有证据、完成记录是否有完成时间、未完成记录是否误填完成时间 |
 | 分类清晰度 | ID 前缀与所在章节是否一致，调研/优化/文档/运维事项是否混放 |
 | Profile 建议 | 是否继续使用 `minimal`，或升级为 `planning`、`extended`、`development` |
@@ -135,6 +136,8 @@ python3 skills/task-list-initialization/scripts/task_list_cli.py standardize --f
 | `--migrate-schema` | 将旧 `发现日期/完成日期/规划日期` 单日期列迁移为 `发现时间/完成时间` |
 | `--fix-only` | 输出修饰：仅打印修复摘要、不展开完整诊断报告；本身不触发修复，需配合 `--apply-safe-fixes` 或 `--migrate-schema` |
 
+`--migrate-schema` 只迁移表头能对齐的行。若某数据行列数与表头不符（几乎总是单元格里未转义的 `|` 把一个单元格劈成两半），它无法安全重排这些格子，会**保留原行并告警**（在 `--fix-only` 摘要和 `--format json` 的 `migrate_warnings` 字段中按 ID + 行号 + 列数列出），而不是静默漏报。遇到这类告警应先手工转义 `|` 或修正列数，再重跑迁移。
+
 标准化时应保留历史事实。不要为了贴合模板自动改写事项含义、移动记录、合并重复 ID 或重算摘要，除非用户明确批准。
 
 ## 样式约定
@@ -145,6 +148,32 @@ python3 skills/task-list-initialization/scripts/task_list_cli.py standardize --f
 - 表格单元格里的 `|` 必须写成 `\|`。
 - 路径、命令、代码标识用反引号。
 - 备注可以长，但应优先写结构化事实，不写空泛总结。
+
+## 语言版本（中文 / English）
+
+task-list 支持两种语言：**中文（简体，`zh`，默认）** 与 **英文（`en`）**。英文版是中文版的忠实翻译：分区集合、ID 前缀（`BUG-`/`ADJ-`/…）、7 列结构完全一致，仅标签不同。`init --lang zh|en` 选择新建语言；`add`/`check`/`summary`/`standardize` 自动按文件结构检测语言，无需传 `--lang`。The task-list supports two languages: Chinese (Simplified, `zh`, default) and English (`en`). The English version is a faithful translation: same section set, same ID prefixes, same 7-column model; only labels differ. `init --lang` picks the language for new files; the other subcommands auto-detect it.
+
+| 中文 | English |
+| --- | --- |
+| 代码 Bug / 调整事项 / 检查事项 / 测试数据 / 文档维护 / 功能开发 / 配置运维 | Bugs / Adjustments / Reviews / Test Data / Docs / Features / Ops |
+| 规划事项 / 优化事项 / 调研事项 / 统计摘要 | Plans / Optimizations / Research / Summary |
+| 动作 / 事项 / 问题描述 / 发现时间 / 完成时间 / 状态 / 备注 | Action / Item / Description / Found / Done / Status / Notes |
+| 修复·开发·优化·调整·规划·检查·文档·运维 | Fix·Develop·Optimize·Adjust·Plan·Review·Doc·Ops |
+| 待修复·已修复·待开发·进行中·已完成·已解决·已关闭 | Pending Fix·Fixed·Pending Dev·In Progress·Done·Resolved·Closed |
+
+Bug 分区中文用 `问题描述`、英文用 `Description`；其余分区中文用 `事项`、英文用 `Item`。The Bug section uses `问题描述`/`Description`; other sections use `事项`/`Item`. 终态（已完成态）：`已修复`/`已完成`/`已解决`/`已关闭` ↔ `Fixed`/`Done`/`Resolved`/`Closed`.
+
+## 日期 schema 变体（双日期 / 单日期）
+
+规范模型是**双日期**：`发现时间` + `完成时间`（含 `HH:MM`），7 列。但有的项目合理地保留旧**单日期** schema：单列 `完成日期`（仅日期，6 列；或 8 列开发扩展），不迁移到双日期。
+
+CLI 不强行套双日期：
+
+- `check` / `standardize` 自动检测文件用哪种 schema（任一分区表头同时含 `发现时间`+`完成时间` → 双；否则含 `完成日期`/`发现日期` → 单；都没有则默认双），并按文件实际 schema 校验。单日期的好文件应通过 check，而非每个分区都报「表头与标准不一致」。
+- 可用 `--schema auto|dual|single` 覆盖（默认 `auto`）。
+- 报告中若检测到单日期，会提示可用 `--migrate-schema` 升级为双日期（需批准，不自动迁移）。
+- 单日期记录的字段下标与双日期兼容：`状态` 与 `备注` 始终在末两列，`完成日期` 在其前，故枚举校验与质量告警对两种 schema 都成立。
+- `add` 同样按目标分区表头识别 schema，并输出对应列数的行（单日期 6 列 / 双日期 7 列 / 开发 8–9 列），故可对单日期文件直接 `add`，无需手写行；单日期记录的完成日期由 `--date`（或完成态下的当前时间）填充，未完成填 `-`。
 
 ## 常见问题和处理
 

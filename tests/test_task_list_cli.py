@@ -479,6 +479,260 @@ class TaskListCliTest(unittest.TestCase):
             self.assertIn("会话结束同步规则：未检测到", result.stdout)
             self.assertIn("询问用户是否安装", result.stdout)
 
+    def test_init_english_template(self):
+        # --lang en produces an English template: English title, section headings, columns.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--lang", "en", "--output", str(target))
+            text = target.read_text(encoding="utf-8")
+            self.assertIn("# Task Tracking List", text)
+            self.assertIn("## Bugs", text)
+            self.assertIn("## Ops", text)
+            self.assertIn("| ID | Action | Description | Found | Done | Status | Notes |", text)
+            self.assertIn("> Fields: The Action field allows only these 8 fixed values", text)
+            # Chinese must NOT leak into the English template.
+            self.assertNotIn("任务跟踪列表", text)
+            self.assertNotIn("代码 Bug", text)
+
+    def test_init_default_lang_is_chinese(self):
+        # No --lang → Chinese (Simplified) template, preserving prior behavior.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            text = target.read_text(encoding="utf-8")
+            self.assertIn("# 任务跟踪列表", text)
+            self.assertIn("## 代码 Bug", text)
+
+    def test_add_to_english_section_auto_detects_locale(self):
+        # add auto-detects English from the file and accepts English section/action/status.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--lang", "en", "--output", str(target))
+            result = self.run_cli(
+                "add", "--file", str(target), "--section", "Bugs",
+                "--action", "Fix", "--description", "login fails",
+                "--status", "Pending Fix", "--notes", "repro locally",
+            )
+            self.assertIn("Added: BUG-001 -> Bugs", result.stdout)
+            text = target.read_text(encoding="utf-8")
+            self.assertIn("| BUG-001 | Fix | login fails |", text)
+            self.assertIn("| BUG-001 | Fix | login fails |", text.split("## Adjustments")[0])
+
+    def test_check_validates_english_enums(self):
+        # check on an English file rejects a non-enum English action.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--lang", "en", "--output", str(target))
+            with target.open("a", encoding="utf-8") as handle:
+                handle.write("\n| BUG-001 | Repair | bad action | 2026-06-17 09:00 | - | Pending Fix | - |\n")
+            result = self.run_cli("check", "--file", str(target), check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Action not in enum", result.stdout)
+
+    def test_standardize_english_report(self):
+        # standardize on an English file yields an English diagnostic report.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--lang", "en", "--output", str(target))
+            result = self.run_cli("standardize", "--file", str(target))
+            self.assertIn("# task-list Standardization Report", result.stdout)
+            self.assertIn("## Maintenance Rule", result.stdout)
+            self.assertIn("Session-end sync rule", result.stdout)
+            # Chinese report strings must not leak.
+            self.assertNotIn("## 维护规则状态", result.stdout)
+
+    def test_summary_write_english(self):
+        # summary --write recomputes the English summary table (Summary / Total labels).
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--lang", "en", "--with-summary", "--output", str(target))
+            self.run_cli(
+                "add", "--file", str(target), "--section", "Bugs",
+                "--action", "Fix", "--description", "fixed bug",
+                "--found-time", "2026-06-18 09:00", "--completed-time", "2026-06-18 10:00",
+                "--status", "Fixed",
+            )
+            self.run_cli("summary", "--file", str(target), "--write")
+            text = target.read_text(encoding="utf-8")
+            self.assertIn("## Summary", text)
+            self.assertIn("| Category | Total | Done | Pending | Rate |", text)
+            self.assertIn("| **Total** | 1 | 1 | 0 | 100% |", text)
+
+    def test_check_accepts_single_date_schema(self):
+        # A legitimately single-date (6-col 完成日期) file in good shape must PASS check
+        # — auto-detected as single, validated against the single-date header. Previously
+        # every section was flagged 表头与标准不一致, making check pure noise on such files.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 完成日期 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | 单日期 bug | 2026-06-17 | 已修复 | ok |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target))
+            self.assertIn("检查通过", result.stdout)
+
+    def test_add_to_single_date_schema(self):
+        # add must emit 6-col rows when the file uses the single-date schema, not dual-date 7-col.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 完成日期 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- |\n",
+                encoding="utf-8",
+            )
+            self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "单日期新 bug", "--status", "待修复",
+            )
+            text = target.read_text(encoding="utf-8")
+            self.assertIn(
+                "| BUG-001 | 修复 | 单日期新 bug | - | 待修复 | - |",
+                text,
+            )
+            result = self.run_cli("check", "--file", str(target))
+            self.assertIn("检查通过", result.stdout)
+            self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "单日期已修复",
+                "--date", "2026-06-17", "--status", "已修复",
+            )
+            text = target.read_text(encoding="utf-8")
+            self.assertIn(
+                "| BUG-002 | 修复 | 单日期已修复 | 2026-06-17 00:00 | 已修复 | - |",
+                text,
+            )
+
+    def test_check_schema_flag_forces_single(self):
+        # --schema single forces single-date validation even without auto-detection logic.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 功能开发\n\n"
+                "| ID | 动作 | 事项 | 完成日期 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- |\n"
+                "| DEV-001 | 开发 | 单日期功能 | 2026-06-17 | 已完成 | - |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target), "--schema", "single")
+            self.assertIn("检查通过", result.stdout)
+
+    def test_standardize_single_date_recommendation(self):
+        # standardize on a single-date file surfaces the schema info line (so the agent can
+        # offer migration) AND validates against single-date (no blanket header-mismatch).
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 完成日期 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | 单日期 | 2026-06-17 | 已修复 | - |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli("standardize", "--file", str(target))
+            self.assertIn("使用单日期 schema（合法变体）", result.stdout)
+            self.assertIn("--migrate-schema", result.stdout)
+            self.assertNotIn("表头与标准不一致", result.stdout)
+
+    def test_standardize_dup_id_mapping_recommendation(self):
+        # When duplicate IDs are detected, standardize must nudge toward adding ADJ- mapping
+        # records instead of silently renumbering (per the standard's 改号映射 rule).
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            with target.open("a", encoding="utf-8") as handle:
+                handle.write("\n| BUG-001 | 修复 | A | 2026-06-17 09:00 | 2026-06-17 10:00 | 已修复 | - |\n")
+                handle.write("| BUG-001 | 修复 | B | 2026-06-17 09:30 | 2026-06-17 10:30 | 已修复 | - |\n")
+            result = self.run_cli("standardize", "--file", str(target))
+            self.assertIn("重复 ID", result.stdout)
+            self.assertIn("新增 ADJ- 记录说明改号映射", result.stdout)
+
+    def test_standardize_json_includes_schema_field(self):
+        # JSON consumers get the detected schema so they can branch on it.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 完成日期 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | 单日期 | 2026-06-17 | 已修复 | - |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli("standardize", "--file", str(target), "--format", "json")
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["schema"], "single")
+
+    def test_migrate_schema_idempotent_with_escaped_pipes(self):
+        # Regression: split_cells must DECODE \| → | so escape_cell re-escapes it on write,
+        # making the migrate round-trip idempotent. Previously a 备注 containing \|\| got
+        # double-escaped to \\|\\| on migrate (real-world hit on CHK-006/DOC-005), turning a
+        # 7-col row into 9 cols. A second migrate must also be stable.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 完成日期 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- |\n"
+                r"| BUG-001 | 修复 | 转义示例 | 2026-06-17 | 已修复 | ok \|\| done |" "\n",
+                encoding="utf-8",
+            )
+            self.run_cli("standardize", "--file", str(target), "--migrate-schema", "--fix-only")
+            text = target.read_text(encoding="utf-8")
+            # Single-escaped pipe preserved (rendered as ||), NOT double-escaped.
+            self.assertIn(r"已修复 | ok \|\| done |", text)
+            self.assertNotIn(r"ok \\|\\|", text)
+            # Idempotent: a second migrate must not add another backslash layer.
+            self.run_cli("standardize", "--file", str(target), "--migrate-schema", "--fix-only")
+            text2 = target.read_text(encoding="utf-8")
+            self.assertIn(r"已修复 | ok \|\| done |", text2)
+            self.assertNotIn(r"ok \\|\\|", text2)
+
+    def test_migrate_warns_on_skipped_malformed_row(self):
+        # Regression: a data row whose cell count doesn't match the legacy header — almost
+        # always an unescaped literal pipe splitting one cell in two — must be reported as a
+        # SKIPPED warning, not silently left behind while the header migrates. Real-world hit:
+        # the prd-draft migration reported "修复完成：12 项" while two 8-col rows (BUG-057/071,
+        # unescaped JS `||`) were silently left un-migrated; only a follow-up `check` caught it.
+        content = (
+            "# 任务跟踪列表\n\n"
+            "## 代码 Bug\n\n"
+            "| ID | 动作 | 问题描述 | 完成日期 | 状态 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- |\n"
+            "| BUG-001 | 修复 | 正常行 | 2026-06-17 | 已修复 | ok |\n"
+            "| BUG-002 | 修复 | 含原始管道 cfg.x || 4096 的行 | 2026-06-17 | 已修复 | 见 admin.js |\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(content, encoding="utf-8")
+            result = self.run_cli(
+                "standardize", "--file", str(target), "--migrate-schema", "--fix-only"
+            )
+            combined = result.stdout + result.stderr
+            self.assertIn("修复完成", combined)
+            # The malformed row is flagged with its ID, source line, and both column counts —
+            # not silently omitted while the header counts as migrated.
+            self.assertIn("BUG-002（第 8 行）", combined)
+            self.assertIn("实际 8 列", combined)
+            self.assertIn("legacy 表头 6 列", combined)
+
+            # JSON consumers see migrate_warnings too (fresh un-migrated copy).
+            target2 = Path(tmp) / "task-list2.md"
+            target2.write_text(content, encoding="utf-8")
+            result_json = self.run_cli(
+                "standardize", "--file", str(target2), "--migrate-schema", "--format", "json"
+            )
+            payload = json.loads(result_json.stdout)
+            self.assertTrue(payload.get("migrate_warnings"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -111,3 +111,80 @@
 ```
 
 使用统计摘要后，新增条目或状态变更都要同步更新摘要。可运行 `task_list_cli.py summary --file task-list.md --write` 按当前记录自动重算并回写该表。
+
+## English templates
+
+English (`--lang en`) is a faithful translation of the Chinese templates above: same section set, same ID prefixes (`BUG-`/`ADJ-`/…), same 7-column model. Generate any profile with `init --lang en --profile <profile>`; the blocks below show the default, dev-extended, and summary shapes.
+
+### Default (minimal)
+
+```markdown
+# Task Tracking List
+
+Records all project tasks: bugs, bug-to-requirement conversions, new requirements, requirement adjustments, feature development, code reviews, test data, documentation, operations, etc.
+
+> Note: This file is the project's task list. All new items, status changes, and completion records should be synced into this file.
+> Fields: The Action field allows only these 8 fixed values: Fix, Develop, Optimize, Adjust, Plan, Review, Doc, Ops.
+> Time: Found and Done are recorded separately in YYYY-MM-DD HH:MM format, using the machine's local timezone in 24-hour time; for incomplete items, Done is -.
+> Merging: Audit/Recheck/Verify/Review/Validate/Assess are unified as "Review"; Refactor/Cleanup as "Optimize"; Proposal/Outline as "Plan"; record-style documentation items as "Doc".
+
+## Bugs
+
+| ID | Action | Description | Found | Done | Status | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+
+## Adjustments
+
+| ID | Action | Item | Found | Done | Status | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+
+## Reviews
+
+| ID | Action | Item | Found | Done | Status | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+
+## Test Data
+
+| ID | Action | Item | Found | Done | Status | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+
+## Docs
+
+| ID | Action | Item | Found | Done | Status | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+
+## Features
+
+| ID | Action | Item | Found | Done | Status | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+
+## Ops
+
+| ID | Action | Item | Found | Done | Status | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+```
+
+`planning` appends `## Plans` (PLN); `extended` adds `## Optimizations` (OPT) and `## Research` (RES) — same columns as above.
+
+### Development extension
+
+When priority and effort estimates are useful, the `development` profile replaces `Features` with a 9-column `Development` table:
+
+```markdown
+## Development
+
+| ID | Action | Item | Priority | Estimate | Found | Done | Status | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+```
+
+### Summary extension
+
+```markdown
+## Summary
+
+| Category | Total | Done | Pending | Rate |
+| --- | ---: | ---: | ---: | ---: |
+| **Total** | 0 | 0 | 0 | 0% |
+```
+
+Run `task_list_cli.py summary --file task-list.md --write` to recompute this table from current records.
