@@ -18,7 +18,7 @@ The default model is intentionally small: a fixed header, task-type sections, an
 3. If a task list exists, preserve records and normalize only with user approval.
 4. Use the standard categories and 7-column table unless project evidence calls for extensions.
 5. When the user wants future agents to keep the list updated, install maintenance rules (opt-in): write the canonical session-end sync rule into the project's agent file — `CLAUDE.md` if it exists, else `AGENTS.md`, else create `CLAUDE.md` — and optionally add the `Stop` hook for a reliable "every session" guarantee. Match the rule text and hook message to the task-list's language. Use the template and file-selection logic in `references/maintenance-rule.md`.
-6. Validate duplicate IDs, broken table rows, unsupported actions/statuses, and summary drift before finishing.
+6. Validate malformed/invalid ID formats, duplicate IDs, broken table rows, unsupported actions/statuses, invalid timestamps, and summary drift before finishing.
 7. For a task list that has been used for a while, use `standardize` first. It defaults to diagnostics and reporting only; run repair only when the user explicitly asks for it or passes repair flags.
 
 ## Default Schema
@@ -125,7 +125,7 @@ python3 skills/task-list-initialization/scripts/task_list_cli.py standardize --f
 python3 skills/task-list-initialization/scripts/task_list_cli.py standardize --file task-list.md --migrate-schema --apply-safe-fixes
 ```
 
-`init --lang {zh,en}` selects the template language (`zh` = Simplified Chinese, default; `en` = English). The other subcommands auto-detect the language from the target file. `check`/`standardize` accept `--schema {auto,dual,single}` (default `auto`) to validate a file that keeps the legacy single-date schema. `add` auto-matches the target section's schema and emits the corresponding column count, so no flag is needed.
+`init --lang {zh,en}` selects the template language (`zh` = Simplified Chinese, default; `en` = English). The other subcommands auto-detect the language from the target file. `check`/`standardize` accept `--schema {auto,dual,single}` (default `auto`) to validate a file that keeps the legacy single-date schema. `add` auto-matches the target section's schema and emits the corresponding column count, so no flag is needed. `check` also flags malformed IDs (e.g. `bug-001`, `BUG-12`) in the first column rather than silently skipping them, and validates timestamps. `add` refuses to write into a section whose header does not match a recognized schema (e.g. a reordered `ID / 状态 / 动作 / …`) instead of guessing the column layout — run `standardize --migrate-schema` or fix the header manually first.
 
 Run `--help` for all options. Prefer CLI generation for new files, then review the result manually for project-specific wording.
 

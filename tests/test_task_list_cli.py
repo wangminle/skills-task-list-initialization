@@ -68,6 +68,48 @@ class TaskListCliTest(unittest.TestCase):
             )
             self.assertIn("| BUG-001 | 修复 | 示例 bug |", text.split("## 调整事项")[0])
 
+    def test_add_next_id_ignores_id_reference_in_notes(self):
+        # Regression: next_id used a full-text regex, so an ID *referenced* inside a 备注
+        # cell (e.g. "关联 BUG-099") was counted as an existing record and inflated the
+        # next number to BUG-100 even when only BUG-001 existed. It must only count IDs
+        # that actually appear as the first column of a data row.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "首条",
+                "--found-time", "2026-06-17 09:00", "--completed-time", "-",
+                "--status", "待修复", "--notes", "关联 BUG-099 上下文",
+            )
+            result = self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "第二条",
+                "--status", "待修复",
+            )
+            # BUG-002, NOT BUG-100: the BUG-099 text in the first row's 备注 is a reference,
+            # not a real record ID.
+            self.assertIn("已追加：BUG-002", result.stdout)
+            self.assertNotIn("BUG-100", result.stdout)
+
+    def test_add_next_id_ignores_cross_prefix_reference_in_description(self):
+        # A reference to a DIFFERENT prefix inside a cell must not affect this prefix's
+        # numbering at all (cross-prefix isolation was already correct; this locks it in).
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "阻塞于 DEV-500",
+                "--status", "待修复",
+            )
+            result = self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "下一条",
+                "--status", "待修复",
+            )
+            self.assertIn("已追加：BUG-002", result.stdout)
+
     def test_check_reports_duplicate_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "task-list.md"
@@ -797,6 +839,150 @@ class TaskListCliTest(unittest.TestCase):
             )
             ok = self.run_cli("check", "--file", str(single))
             self.assertIn("检查通过", ok.stdout)
+
+    def test_check_mixed_schema_does_not_misindex_time(self):
+        # Regression: detect_schema is file-level (any dual section → whole file "dual"), but
+        # check_text indexed time cells by a file-wide fixed offset (cells[-3]/[-4]). In a
+        # MIXED file — one dual section (7-col) + one single section (6-col) — the 6-col row
+        # was mis-indexed as 7-col, so the 事项 value ("b") was flagged as 时间不合法. Time
+        # columns must be located from each section's OWN header by name.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | a | 2026-06-17 09:00 | - | 待修复 | - |\n\n"
+                "## 调整事项\n\n"
+                "| ID | 动作 | 事项 | 完成日期 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- |\n"
+                "| ADJ-001 | 调整 | b | 2026-06-17 | 已完成 | - |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target), check=False)
+            combined = result.stdout + result.stderr
+            # The single section's header still legitimately mismatches under dual detection —
+            # that report is correct and stays. But the 事项 value must NOT be mis-flagged.
+            self.assertIn("表头与标准不一致：调整事项", combined)
+            self.assertNotIn("时间不合法", combined)
+
+            # A genuinely invalid time in EITHER schema of a mixed file must still be caught
+            # (the fix must not silence real errors to hide the mis-index).
+            bad = Path(tmp) / "bad.md"
+            bad.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | a | 2026-99-99 99:99 | - | 待修复 | - |\n\n"
+                "## 调整事项\n\n"
+                "| ID | 动作 | 事项 | 完成日期 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- |\n"
+                "| ADJ-001 | 调整 | b | 2026-13-45 | 已完成 | - |\n",
+                encoding="utf-8",
+            )
+            bad_result = self.run_cli("check", "--file", str(bad), check=False)
+            bad_combined = bad_result.stdout + bad_result.stderr
+            self.assertIn("2026-99-99 99:99", bad_combined)
+            self.assertIn("2026-13-45", bad_combined)
+
+    def test_check_flags_invalid_id_format(self):
+        # Regression: a malformed ID (bug-001, BUG-12, Bug-1) in the first column used to be
+        # silently skipped — it matched neither ^[A-Z]+-\d{3,}$ (so no field checks ran) nor
+        # any error path, so check reported "passed" while summary reported 总计：0. Such IDs
+        # must now surface as bad_id_line so the file is not treated as clean.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| bug-001 | 修复 | 非法ID | 2026-06-23 10:00 | - | 待修复 | - |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target), check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("ID 格式非法", result.stdout + result.stderr)
+
+            # A legal ID must still pass; and a 备注/描述 cell that merely LOOKS like an ID
+            # (e.g. "见 bug-001") must NOT be flagged — _looks_like_id only inspects cells[0].
+            ok = Path(tmp) / "ok.md"
+            ok.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | 正常 | 2026-06-23 10:00 | - | 待修复 | 见 bug-001 旧引用 |\n",
+                encoding="utf-8",
+            )
+            ok_result = self.run_cli("check", "--file", str(ok))
+            self.assertIn("检查通过", ok_result.stdout)
+
+    def test_add_refuses_nonstandard_reordered_header(self):
+        # Regression: on a reordered but column-count-matching header (| ID | 状态 | 动作 | ... |),
+        # add used to fall back to column COUNT and write values in the default order, so the
+        # 动作 value "修复" landed under the 状态 column — silent data corruption. add must now
+        # REFUSE and leave the file untouched, directing the user to standardize first.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 状态 | 动作 | 问题描述 | 发现时间 | 完成时间 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n",
+                encoding="utf-8",
+            )
+            before = target.read_text(encoding="utf-8")
+            result = self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "顺序错位", "--status", "待修复",
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            # File untouched: no row written, header still ends with the separator.
+            self.assertEqual(before, target.read_text(encoding="utf-8"))
+            self.assertNotIn("顺序错位", target.read_text(encoding="utf-8"))
+            self.assertIn("表头与标准 schema 不符", result.stdout + result.stderr)
+
+            # A legitimate single-date header (6-col, correct order) must still accept add.
+            single = Path(tmp) / "single.md"
+            single.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 完成日期 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- |\n",
+                encoding="utf-8",
+            )
+            self.run_cli(
+                "add", "--file", str(single), "--section", "代码 Bug",
+                "--action", "修复", "--description", "单日期正常", "--status", "待修复",
+            )
+            self.assertIn("| BUG-001 | 修复 | 单日期正常 |", single.read_text(encoding="utf-8"))
+
+    def test_add_refuses_duplicate_explicit_id(self):
+        # Regression: `add --id BUG-001` when BUG-001 already exists silently appended a
+        # second row (rc=0, no warning); only check caught it afterward. add now refuses at
+        # write time, enforcing the "IDs unique, never reused" invariant on the write path.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "first", "--status", "已修复",
+            )
+            result = self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--id", "BUG-001", "--action", "修复", "--description", "DUPE",
+                "--status", "已修复", check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("BUG-001", result.stderr + result.stdout)
+            # No partial write — the duplicate must not be in the file.
+            text = target.read_text(encoding="utf-8")
+            self.assertNotIn("DUPE", text)
+            self.assertEqual(text.count("| BUG-001 |"), 1)
 
 
 if __name__ == "__main__":

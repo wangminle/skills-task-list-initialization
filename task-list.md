@@ -26,6 +26,10 @@
 | BUG-013 | 修复 | command_add 不识别单日期 schema，向 6 列表追加 7 列行导致列数异常 | 2026-06-22 18:12 | 2026-06-22 18:12 | 已修复 | command_add 按表头匹配 dual/single/dev 变体并生成对应列数；新增 single_date_cell 辅助函数与 test_add_to_single_date_schema；record_quality_warnings 改为 len(cells)<6 以覆盖单日期记录 |
 | BUG-014 | 修复 | find_section_by_title 对未登记大小写的英文分区名报 not found（如 --section bugs） | 2026-06-22 20:13 | 2026-06-22 20:13 | 已修复 | 根因：_EN.section_aliases 只为部分分区（features/docs）登记了小写复数，bugs/reviews/adjustments 等缺失；find_section_by_title 完全依赖该映射，导致英文文件下 add --section bugs 直接 not found。修复：精确别名与反查均未命中后，加一轮对文件实际标题的大小写不敏感回退（title.lower()==heading.lower()），覆盖 bugs/BUGS/Reviews 等任意大小写，中文（代码 bug→代码 Bug）同样生效。+回归测试 test_add_section_is_case_insensitive。 |
 | BUG-015 | 修复 | 时间字段仅做形状正则，非法日期（2026-99-99 99:99）可写入且 check 不拦 | 2026-06-22 20:13 | 2026-06-22 20:13 | 已修复 | 根因：normalize_time 仅 re.match 形状不解析真实日期；check_text 只校验列数/动作/状态，不校验时间值。修复：normalize_time 形状通过后再用 datetime.strptime 真解析，不存在日期直接 bad_time 拒写、文件不变；check_text 对每行 cells[-3]（完成时间）及 dual schema 下 cells[-4]（发现时间）用 _is_valid_time 校验（接受 - / 空 / YYYY-MM-DD HH:MM / YYYY-MM-DD 单日期），不存在日期报 bad_time_line。新增 _is_valid_time/_try_strptime 辅助。+回归测试 test_add_rejects_invalid_date、test_check_flags_invalid_date。 |
+| BUG-016 | 修复 | check 对非法 ID（bug-001/BUG-12）静默放行 | 2026-06-23 12:10 | 2026-06-23 12:10 | 已修复 | check_text 字段校验全嵌在合法 ID 分支内，非法 ID 整块跳过致'检查通过'+summary 总计0；新增 _looks_like_id 启发式与 bad_id_line 报错，check_ok 文案补'非法 ID' |
+| BUG-017 | 修复 | add 在错位表头下按列数硬回退污染数据 | 2026-06-23 12:10 | 2026-06-23 12:10 | 已修复 | 表头列序错位（ID/状态/动作/...）时按默认列序写值，动作值'修复'落入状态列；改为拒绝写入并提示先 standardize/migrate，补 nonstandard_header 报错 |
+| BUG-018 | 修复 | check_text 混合 schema 文件时间校验用错列下标 | 2026-06-23 12:10 | 2026-06-23 12:10 | 已修复 | detect_schema 文件级判定+固定下标 cells[-3]，混合文件6列行被当7列索引致把事项值当时间报错；新增 time_column_indices 按各分区表头列名定位 |
+| BUG-019 | 修复 | add --id 指定已存在 ID 时静默追加重复行（rc=0 无提示），违反 ID 唯一不变量 | 2026-06-23 12:24 | 2026-06-23 12:24 | 已修复 | 根因：command_add 采用 args.id 时不检查该 ID 是否已作为记录首列存在，显式 --id 复用既有 ID 会静默写入重复行，check 事后才报。修复：item_id 确定后，若 args.id 命中 collect_records 扫出的现有 ID 集合则 raise dup_id_on_add 拒写（新增中英文案），未占用 ID 仍可正常用。与 next_id/bad_id_line/nonstandard_header 同属写时防线。+回归测试 test_add_refuses_duplicate_explicit_id。 |
 
 ## 调整事项
 
@@ -40,6 +44,8 @@
 | CHK-001 | 检查 | 当前项目结构、示例任务清单和任务清单标准已检查 | 2026-06-18 00:00 | 2026-06-18 00:00 | 已完成 | 依据 skills/task-list-initialization/SKILL.md、references/task-list-standard.md、示例 task-list 与 CLI/测试文件确认采用默认 7 分区模板 |
 | CHK-002 | 检查 | 复核 CLI 分区别名、--fix-only 语义、--date 完成时间、--project-root 一致性 | 2026-06-22 12:10 | 2026-06-22 12:10 | 已完成 | 依据代码审查反馈逐项确认 5 个问题，全部修复并补回归测试，共 15 个测试通过 |
 | CHK-003 | 检查 | 全量审查 CLI/测试/SKILL/标准/模板/README/CLAUDE/hook/维护规则文档与代码一致性 | 2026-06-22 13:06 | 2026-06-22 13:06 | 已完成 | 动态验证 check/summary/竖线转义/中间统计摘要回写/标题空白等边界；仅发现并修复 insert_row 标题匹配不一致 bug |
+| CHK-004 | 检查 | 全量回归+边界探测核查 CLI 是否仍有 bug | 2026-06-23 11:35 | 2026-06-23 11:35 | 已完成 | 44 项 pytest 全通过；动态探测 next_id 引用隔离/开发档9列/单日期/竖线转义往返/摘要中部回写/8列旧开发档迁移均正常；未发现可执行 bug |
+| CHK-005 | 检查 | 复核全部文档与最新实现一致性并登记本轮bug修复 | 2026-06-23 12:10 | 2026-06-23 12:10 | 已完成 | 逐项核对SKILL/README/references与CLI实现；发现文档未体现非法ID检测与表头拒绝两项新行为，已补齐；task-list.md历史记录按追加式规则保留不改，本轮工作以新记录登记 |
 
 ## 测试数据
 
@@ -59,6 +65,7 @@
 | TST-012 | 检查 | 为转义竖线 migrate 幂等性补充回归测试 | 2026-06-22 17:52 | 2026-06-22 17:52 | 已完成 | 6 列含转义竖线备注 migrate 后保留单层转义、二次 migrate 无变更、无 9 列异常；python3 -m unittest 共 37 个测试全部通过 |
 | TST-013 | 检查 | migrate 跳行告警回归测试 test_migrate_warns_on_skipped_malformed_row | 2026-06-22 18:10 | 2026-06-22 18:10 | 已完成 | 断言 --migrate-schema --fix-only 输出含「ID + 第 N 行 + 实际 X 列 + legacy 表头 Y 列」的跳行告警，且 --format json 的 migrate_warnings 非空；干净文件无误报。全套 38 通过（37 增至 38）。 |
 | TST-014 | 检查 | 分区大小写不敏感 + 时间校验回归测试（3 条） | 2026-06-22 20:13 | 2026-06-22 20:13 | 已完成 | test_add_section_is_case_insensitive（bugs/BUGS→Bugs）、test_add_rejects_invalid_date（2026-99-99 99:99 拒写且文件不变）、test_check_flags_invalid_date（坏日期被 check 拦 + 单日期 date-only 不误报）。全套 42 通过（39 增至 42）。 |
+| TST-015 | 检查 | add --id 重复 ID 拒写回归测试 | 2026-06-23 12:24 | 2026-06-23 12:24 | 已完成 | test_add_refuses_duplicate_explicit_id：--id 指定已存在的 BUG-001 时 rc!=0、文案含 BUG-001、文件不变（DUPE 未写入、BUG-001 计数仍 1）；未占用的 --id 仍可正常追加。全套 48 通过（47 增至 48）。 |
 
 ## 文档维护
 
@@ -81,6 +88,8 @@
 | DOC-015 | 文档 | 文档同步至最新 CLI 能力：add 的 schema 自动识别、migrate 跳行告警 | 2026-06-22 18:21 | 2026-06-22 18:21 | 已完成 | 补齐 BUG-013（add 单日期）与 BUG-012（migrate 跳行告警）的文档缺口：SKILL.md 的 --migrate-schema 条补 migrate_warnings 跳行语义、Schema variants 段与 CLI 段补 add 按分区 schema 输出对应列数；README 中英文特性列表与 CLI 段同步 add schema 说明；task-list-standard.md 日期 schema 变体段补 add 行为条目（含 --date 填充规则）。 |
 | DOC-016 | 文档 | README 英文段改用英文 schema 标签，与 init --lang en 产物一致 | 2026-06-22 18:44 | 2026-06-22 18:44 | 已完成 | 双语支持后英文段仍用中文标签（代码 Bug/修复/待修复）且含已失效的 intentionally Chinese 说明，与 init --lang en 生成的全英文文件矛盾。改：表头/字段表/分区表/动作枚举/状态/profiles/migrate 目标列/add 示例全部转英文（取自 _EN locale 权威值 Bugs/Adjustments/Reviews/.../Fix/Develop/.../Pending Fix/Fixed/...）；intentionally Chinese 改为 localization 说明（前缀与列模型跨语言一致，仅标签不同，指向 bilingual 表）。中文段不动；英文 add 示例已 e2e 验证可跑通。 |
 | DOC-017 | 文档 | 文档同步：测试数 39 改 42、check 行为补时间戳校验、覆盖列表补两项 | 2026-06-22 20:13 | 2026-06-22 20:13 | 已完成 | README badge/英文正文/中文正文测试数 39 改 42；中英文 check 命令行补时间戳校验；Tested 覆盖列表补时间戳校验 + 分区别名大小写不敏感。 |
+| DOC-018 | 文档 | 文档与最新实现同步：非法ID检测、表头拒绝、测试数47 | 2026-06-23 12:10 | 2026-06-23 12:10 | 已完成 | README中英文badge/特性/Tested/命令说明补非法ID检测+非标准表头拒绝+测试数42改47；SKILL.md workflow step6+CLI段补两项行为；task-list-standard.md check维度表+常见问题表补非法ID与add拒绝条目 |
+| DOC-019 | 文档 | README 同步 add --id 重复拒绝 + 测试数 47 改 48 | 2026-06-23 12:24 | 2026-06-23 12:24 | 已完成 | 中英文「Safe add / 严格 check」bullet 补「显式 --id 指定已存在 ID 时拒写而非静默制造重复」；测试数 badge/英文正文/中文正文 47 改 48。 |
 
 ## 功能开发
 

@@ -231,6 +231,8 @@ T = {
         "bad_status_line": "状态不在建议枚举中：第 {0} 行 {1}",
         "bad_time_line": "时间不合法：第 {0} 行 {1}",
         "dup_id": "重复 ID：{0} 出现在行 {1}",
+        "bad_id_line": "第 {0} 行：ID 格式非法「{1}」，应为 大写前缀-三位数字（如 BUG-001）",
+        "dup_id_on_add": "ID 已存在：{0}。--id 不能复用已占用的 ID；请去掉 --id 自动分配下一个，或指定一个未使用的 ID。",
         "prefix_mismatch": "第 {0} 行：{1} 位于「{2}」，但该分区期望前缀 {3}-",
         "warn_sparse_notes": "{0} 条记录备注为空或仅为 -，建议补充文件、测试、来源或后续风险。",
         "warn_completed_no_time": "{0} 条已完成/已修复记录缺少完成时间。",
@@ -248,11 +250,12 @@ T = {
         "migrate_header": "迁移「{0}」表头为 {1} 列新 schema",
         "migrate_skip": "⚠️ {0}（第 {1} 行）：实际 {3} 列、legacy 表头 {2} 列，已跳过未迁移——多为单元格内未转义的 |，需人工处理",
         "migrate_skips": "⚠️ {0} 行因列数与表头不符未迁移（多为单元格内未转义的 |，需人工处理）：",
-        "check_ok": "检查通过：未发现重复 ID、重复章节、列数异常或枚举问题",
+        "check_ok": "检查通过：未发现非法 ID、重复 ID、重复章节、列数异常或枚举问题",
         "section_not_found": "未找到分区：{0}",
         "prefix_unknown": "无法推断分区 ID 前缀：{0}",
         "bad_action": "动作不在枚举中：{0}",
         "bad_status": "状态不在建议枚举中：{0}",
+        "nonstandard_header": "分区「{0}」表头与标准 schema 不符（{1} 列），拒绝写入以免数据落入错误列。请先运行 standardize --migrate-schema 修正表头，或手工核对列顺序后再 add。",
         "bad_time": "时间格式应为 YYYY-MM-DD HH:MM：{0}",
         "bad_lang": "不支持的语言：{0}（可选：zh、en）",
         "target_exists": "目标文件已存在，使用 --force 覆盖：{0}",
@@ -296,6 +299,8 @@ T = {
         "bad_status_line": "Status not in suggested enum: line {0} {1}",
         "bad_time_line": "Invalid time: line {0} {1}",
         "dup_id": "Duplicate ID: {0} at lines {1}",
+        "bad_id_line": "Line {0}: invalid ID \"{1}\", expected uppercase prefix + digits (e.g. BUG-001)",
+        "dup_id_on_add": "ID already exists: {0}. --id cannot reuse an occupied ID; drop --id to auto-assign the next one, or specify an unused ID.",
         "prefix_mismatch": "Line {0}: {1} is under \"{2}\" but this section expects prefix {3}-",
         "warn_sparse_notes": "{0} records have empty or '-' notes; add files, tests, sources, or follow-up risks.",
         "warn_completed_no_time": "{0} completed/fixed records are missing a Done time.",
@@ -313,11 +318,12 @@ T = {
         "migrate_header": "Migrate \"{0}\" header to {1}-column schema",
         "migrate_skip": "⚠️ {0} (line {1}): {3} cells vs {2}-col legacy header; skipped — likely an unescaped | in a cell; fix manually",
         "migrate_skips": "⚠️ {0} row(s) skipped due to column mismatch (likely an unescaped | in a cell; fix manually):",
-        "check_ok": "Check passed: no duplicate IDs, duplicate sections, column mismatches, or enum issues",
+        "check_ok": "Check passed: no invalid IDs, duplicate IDs, duplicate sections, column mismatches, or enum issues",
         "section_not_found": "Section not found: {0}",
         "prefix_unknown": "Cannot infer ID prefix for section: {0}",
         "bad_action": "Action not in enum: {0}",
         "bad_status": "Status not in suggested enum: {0}",
+        "nonstandard_header": "Section \"{0}\" header does not match a standard schema ({1} cols); refusing to write to avoid putting data in the wrong column. Run standardize --migrate-schema to fix the header, or check the column order manually before add.",
         "bad_time": "Time format should be YYYY-MM-DD HH:MM: {0}",
         "bad_lang": "Unsupported language: {0} (options: zh, en)",
         "target_exists": "Target exists; use --force to overwrite: {0}",
@@ -568,8 +574,20 @@ def prefix_for_section(title: str, locale: Locale) -> str:
 
 
 def next_id(prefix: str, text: str) -> str:
-    ids = re.findall(rf"\b{re.escape(prefix)}-(\d{{3,}})\b", text)
-    number = max((int(item) for item in ids), default=0) + 1
+    # Only count IDs that actually appear as the FIRST column of a data row. A naive
+    # full-text regex would also match an ID *referenced* inside a 备注 / 问题描述 cell
+    # (e.g. "关联 BUG-099", "依赖 DEV-012") and inflate the next number, producing
+    # BUG-100 instead of BUG-002 even when only BUG-001 exists as a real record.
+    # collect_records already parses rows and matches the ID column with ^[A-Z]+-\d{3,}$,
+    # so reusing it keeps the row/column scope correct while preserving the >=3-digit rule.
+    id_pattern = re.compile(rf"^{re.escape(prefix)}-(\d{{3,}})$")
+    numbers = []
+    for _, _, cells in collect_records(text):
+        if cells:
+            match = id_pattern.match(cells[0])
+            if match:
+                numbers.append(int(match.group(1)))
+    number = max(numbers, default=0) + 1
     return f"{prefix}-{number:03d}"
 
 
@@ -595,6 +613,46 @@ def _is_valid_time(value: str) -> bool:
     if value in ("-", ""):
         return True
     return any(_try_strptime(value, fmt) for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"))
+
+
+_ID_LIKE = re.compile(r"^[A-Za-z]+-\d+$")
+
+
+def _looks_like_id(value: str) -> bool:
+    """Heuristic: does this cell LOOK like an ID (letters-digits) without being valid?
+
+    Matches the PREFIX-NUMBER shape (e.g. bug-001, BUG-12, Bug-1) so a malformed ID in the
+    first column surfaces in check instead of being silently skipped. Deliberately narrower
+    than a generic \"contains a dash\": it requires leading letters then a dash then digits,
+    which ordinary 描述/备注 text almost never satisfies.
+    """
+    return bool(_ID_LIKE.match(value.strip()))
+
+
+def time_column_indices(headers: list[str], locale: Locale) -> list[int]:
+    """Indices of the date/time columns in a section header, found BY NAME.
+
+    A section may use either the dual schema (发现时间 + 完成时间 / Found + Done, both 7-col
+    and 9-col dev) or the single schema (完成日期 / Done Date, 6-col / 8-col dev). A mixed
+    file can carry both shapes in different sections, so time columns must be located from
+    each section's own header names — never from a file-wide fixed offset like cells[-3].
+    Doing otherwise mis-indexes a 6-col row as if it were 7-col and flags the 事项 value
+    ("b") as an invalid time. Returns the column indices actually present (found-time first
+    when present, then completed-time).
+    """
+    dual = DUAL_DATE_COLS[locale.name]
+    single_aliases = SINGLE_DATE_ALIASES[locale.name]
+    indices: list[int] = []
+    for position, name in enumerate(headers):
+        if name == dual[0]:
+            indices.append(position)
+        elif name in (dual[1], *single_aliases):
+            # 完成时间 (dual) and 完成日期/发现日期 (single) all serve as the
+            # completed-time slot; keep completed-time after found-time in order.
+            indices.append(position)
+    # Re-sort to guarantee found-time (if present) precedes completed-time, matching the
+    # header's left-to-right order rather than insertion order above.
+    return sorted(indices)
 
 
 def normalize_time(value: str | None, default: str, locale: Locale | None = None) -> str:
@@ -710,6 +768,14 @@ def command_add(args: argparse.Namespace) -> int:
         raise SystemExit(T[lang]["section_not_found"].format(section_title))
     prefix = prefix_for_section(section_title, locale)
     item_id = args.id or next_id(prefix, text)
+    if args.id:
+        # --id is an explicit override; refuse to reuse an ID already present as a record's
+        # first cell. Without this, add silently appends a duplicate (rc=0, no warning) that
+        # only check catches after the row is already written. Mirrors the next_id /
+        # bad_id_line defense line: the uniqueness invariant is enforced at write time too.
+        existing_ids = {cells[0] for _, _, cells in collect_records(text) if cells}
+        if args.id in existing_ids:
+            raise SystemExit(T[lang]["dup_id_on_add"].format(args.id))
     now = local_minute_now()
     found_time = normalize_time(args.found_time or args.date, now, locale)
     # --date is a legacy single-date fallback. It always seeds 发现时间/Found; for 完成时间/Done it
@@ -769,41 +835,13 @@ def command_add(args: argparse.Namespace) -> int:
             notes,
         ]
     else:
-        # Non-standard header: fall back to column count so mixed/legacy files still work.
-        if len(headers) == len(dev_dual):
-            row = [
-                item_id,
-                args.action,
-                description,
-                args.priority or "P2",
-                args.estimate or "-",
-                found_time,
-                completed_time,
-                args.status,
-                notes,
-            ]
-        elif len(headers) == len(dev_single):
-            row = [
-                item_id,
-                args.action,
-                description,
-                args.priority or "P2",
-                args.estimate or "-",
-                single_date_cell(args, args.status, now, locale),
-                args.status,
-                notes,
-            ]
-        elif len(headers) == len(section_single):
-            row = [
-                item_id,
-                args.action,
-                description,
-                single_date_cell(args, args.status, now, locale),
-                args.status,
-                notes,
-            ]
-        else:
-            row = [item_id, args.action, description, found_time, completed_time, args.status, notes]
+        # Non-standard header (neither a recognized schema nor matching column order). The old
+        # code guessed the row layout from column COUNT alone and wrote values in the default
+        # order — so on a reordered header like | ID | 状态 | 动作 | ... | the 动作 value "修复"
+        # landed under the 状态 column, silently corrupting data. Refuse instead: without
+        # matching column NAMES we cannot align values to columns safely. Direct the user to
+        # standardize/migrate the header first.
+        raise SystemExit(T[lang]["nonstandard_header"].format(section_title, len(headers)))
 
     new_text = insert_row(text, section_title, row, lang)
     if args.dry_run:
@@ -1247,13 +1285,29 @@ def check_text(text: str, locale: Locale, schema: str = "dual") -> list[str]:
                     if cells[status_index] not in locale.statuses:
                         issues.append(m["bad_status_line"].format(line_no + 1, cells[status_index]))
                 if len(cells) >= 6:
-                    # Validate time cells: completed-time (cells[-3]) always; found-time
-                    # (cells[-4]) only under the dual schema. "-" / empty / real dates pass;
-                    # shape-valid but nonexistent dates (2026-99-99 99:99) are flagged.
-                    time_indices = [-3] + ([-4] if schema == "dual" else [])
+                    # Validate time cells by locating them FROM THIS SECTION'S HEADER by name
+                    # (发现时间/完成时间, or 完成日期/Done Date). A mixed file can carry both
+                    # dual and single sections; indexing by a file-wide fixed offset (cells[-3])
+                    # would mis-index a 6-col row as 7-col and flag the 事项 value as an invalid
+                    # time. When the header is non-standard (no recognized date column names),
+                    # fall back to the legacy fixed-offset logic so behavior is unchanged.
+                    named_indices = time_column_indices(headers, locale)
+                    if named_indices:
+                        time_indices = named_indices
+                    elif schema == "dual":
+                        time_indices = [-3, -4]
+                    else:
+                        time_indices = [-3]
                     for tidx in time_indices:
-                        if not _is_valid_time(cells[tidx]):
+                        if 0 <= tidx < len(cells) and not _is_valid_time(cells[tidx]):
                             issues.append(m["bad_time_line"].format(line_no + 1, cells[tidx]))
+            elif cells and _looks_like_id(cells[0]):
+                # A first cell shaped like an ID (letters-digits, e.g. bug-001 / BUG-12) but
+                # NOT matching the strict ^[A-Z]+-\d{3,}$ form used to fall through silently:
+                # it was neither counted as a record nor flagged, so check reported "passed"
+                # and summary reported "总计：0". Flag it explicitly so malformed IDs surface
+                # instead of hiding as un-validated rows.
+                issues.append(m["bad_id_line"].format(line_no + 1, cells[0]))
 
     for item_id, locations in id_locations.items():
         if len(locations) > 1:
