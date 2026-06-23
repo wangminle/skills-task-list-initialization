@@ -24,6 +24,8 @@
 | BUG-011 | 修复 | split_cells 与 escape_cell 转义不幂等：migrate 重建行时把备注里已转义的竖线双重转义成 \\\|，导致该行被解析成 9 列（另一项目迁移 CHK-006/DOC-005 时实测触发） | 2026-06-22 17:51 | 2026-06-22 17:51 | 已修复 | split_cells 改为解码转义竖线为逻辑值（解析器应解码而非保留语法），escape_cell 写回再编码，二者互逆、往返幂等；二次 migrate 零变更；新增幂等回归测试 |
 | BUG-012 | 修复 | standardize --migrate-schema 静默跳过列数异常行：表头迁移后，破损数据行被原样漏下且不计入告警 | 2026-06-22 18:10 | 2026-06-22 18:10 | 已修复 | 根因：migrate_legacy_schema 的 fallthrough 分支对「活跃迁移上下文 + 数据行 + 列数与 legacy 表头不符」直接 append 不告警。真实命中：某项目迁移报「修复完成：12 项」却漏掉两行单元格内未转义的 JS \|\| 的记录，靠后续 check 才发现。修复：fallthrough 前记 migrate_skip 告警（ID + 行号 + legacy 列数 + 实际列数），随第三返回值 warnings 返回，在 --fix-only 摘要、--format json、报告三处暴露。与 BUG-011（转义幂等）、DEV-009（schema 变体）同属 migrate 路径的真实脏数据兜底。 |
 | BUG-013 | 修复 | command_add 不识别单日期 schema，向 6 列表追加 7 列行导致列数异常 | 2026-06-22 18:12 | 2026-06-22 18:12 | 已修复 | command_add 按表头匹配 dual/single/dev 变体并生成对应列数；新增 single_date_cell 辅助函数与 test_add_to_single_date_schema；record_quality_warnings 改为 len(cells)<6 以覆盖单日期记录 |
+| BUG-014 | 修复 | find_section_by_title 对未登记大小写的英文分区名报 not found（如 --section bugs） | 2026-06-22 20:13 | 2026-06-22 20:13 | 已修复 | 根因：_EN.section_aliases 只为部分分区（features/docs）登记了小写复数，bugs/reviews/adjustments 等缺失；find_section_by_title 完全依赖该映射，导致英文文件下 add --section bugs 直接 not found。修复：精确别名与反查均未命中后，加一轮对文件实际标题的大小写不敏感回退（title.lower()==heading.lower()），覆盖 bugs/BUGS/Reviews 等任意大小写，中文（代码 bug→代码 Bug）同样生效。+回归测试 test_add_section_is_case_insensitive。 |
+| BUG-015 | 修复 | 时间字段仅做形状正则，非法日期（2026-99-99 99:99）可写入且 check 不拦 | 2026-06-22 20:13 | 2026-06-22 20:13 | 已修复 | 根因：normalize_time 仅 re.match 形状不解析真实日期；check_text 只校验列数/动作/状态，不校验时间值。修复：normalize_time 形状通过后再用 datetime.strptime 真解析，不存在日期直接 bad_time 拒写、文件不变；check_text 对每行 cells[-3]（完成时间）及 dual schema 下 cells[-4]（发现时间）用 _is_valid_time 校验（接受 - / 空 / YYYY-MM-DD HH:MM / YYYY-MM-DD 单日期），不存在日期报 bad_time_line。新增 _is_valid_time/_try_strptime 辅助。+回归测试 test_add_rejects_invalid_date、test_check_flags_invalid_date。 |
 
 ## 调整事项
 
@@ -56,6 +58,7 @@
 | TST-011 | 检查 | 为日期 schema 变体检测与重复 ID 映射建议补充回归测试 | 2026-06-22 17:40 | 2026-06-22 17:40 | 已完成 | 5 个测试：check 接受单日期 schema/check --schema single 强制/standardize 单日期升级建议且不报表头不一致/standardize 重复 ID 建议 ADJ 映射/JSON 含 schema 字段；python3 -m unittest 共 36 个测试全部通过 |
 | TST-012 | 检查 | 为转义竖线 migrate 幂等性补充回归测试 | 2026-06-22 17:52 | 2026-06-22 17:52 | 已完成 | 6 列含转义竖线备注 migrate 后保留单层转义、二次 migrate 无变更、无 9 列异常；python3 -m unittest 共 37 个测试全部通过 |
 | TST-013 | 检查 | migrate 跳行告警回归测试 test_migrate_warns_on_skipped_malformed_row | 2026-06-22 18:10 | 2026-06-22 18:10 | 已完成 | 断言 --migrate-schema --fix-only 输出含「ID + 第 N 行 + 实际 X 列 + legacy 表头 Y 列」的跳行告警，且 --format json 的 migrate_warnings 非空；干净文件无误报。全套 38 通过（37 增至 38）。 |
+| TST-014 | 检查 | 分区大小写不敏感 + 时间校验回归测试（3 条） | 2026-06-22 20:13 | 2026-06-22 20:13 | 已完成 | test_add_section_is_case_insensitive（bugs/BUGS→Bugs）、test_add_rejects_invalid_date（2026-99-99 99:99 拒写且文件不变）、test_check_flags_invalid_date（坏日期被 check 拦 + 单日期 date-only 不误报）。全套 42 通过（39 增至 42）。 |
 
 ## 文档维护
 
@@ -77,6 +80,7 @@
 | DOC-014 | 文档 | migrate 跳行告警的文档同步：README 中英文 + task-list-standard.md | 2026-06-22 18:10 | 2026-06-22 18:10 | 已完成 | README 测试徽标 36 改 38、中英文 schema 变体段补充 migrate_warnings 行为说明；task-list-standard.md 的 --migrate-schema 表后补「跳行告警语义 + 先手工转义再重跑」处理建议。 |
 | DOC-015 | 文档 | 文档同步至最新 CLI 能力：add 的 schema 自动识别、migrate 跳行告警 | 2026-06-22 18:21 | 2026-06-22 18:21 | 已完成 | 补齐 BUG-013（add 单日期）与 BUG-012（migrate 跳行告警）的文档缺口：SKILL.md 的 --migrate-schema 条补 migrate_warnings 跳行语义、Schema variants 段与 CLI 段补 add 按分区 schema 输出对应列数；README 中英文特性列表与 CLI 段同步 add schema 说明；task-list-standard.md 日期 schema 变体段补 add 行为条目（含 --date 填充规则）。 |
 | DOC-016 | 文档 | README 英文段改用英文 schema 标签，与 init --lang en 产物一致 | 2026-06-22 18:44 | 2026-06-22 18:44 | 已完成 | 双语支持后英文段仍用中文标签（代码 Bug/修复/待修复）且含已失效的 intentionally Chinese 说明，与 init --lang en 生成的全英文文件矛盾。改：表头/字段表/分区表/动作枚举/状态/profiles/migrate 目标列/add 示例全部转英文（取自 _EN locale 权威值 Bugs/Adjustments/Reviews/.../Fix/Develop/.../Pending Fix/Fixed/...）；intentionally Chinese 改为 localization 说明（前缀与列模型跨语言一致，仅标签不同，指向 bilingual 表）。中文段不动；英文 add 示例已 e2e 验证可跑通。 |
+| DOC-017 | 文档 | 文档同步：测试数 39 改 42、check 行为补时间戳校验、覆盖列表补两项 | 2026-06-22 20:13 | 2026-06-22 20:13 | 已完成 | README badge/英文正文/中文正文测试数 39 改 42；中英文 check 命令行补时间戳校验；Tested 覆盖列表补时间戳校验 + 分区别名大小写不敏感。 |
 
 ## 功能开发
 

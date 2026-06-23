@@ -733,6 +733,71 @@ class TaskListCliTest(unittest.TestCase):
             payload = json.loads(result_json.stdout)
             self.assertTrue(payload.get("migrate_warnings"))
 
+    def test_add_section_is_case_insensitive(self):
+        # Regression: the EN alias table only carried lowercase plurals for SOME sections
+        # (features/docs) but not others (bugs/reviews/...), so `add --section bugs` failed
+        # with "section not found". Section resolution is now case-insensitive against the
+        # headings actually present in the file.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--lang", "en", "--output", str(target))
+            self.run_cli(
+                "add", "--file", str(target), "--section", "bugs",
+                "--action", "Fix", "--description", "lowercase", "--status", "Pending Fix",
+            )
+            self.run_cli(
+                "add", "--file", str(target), "--section", "BUGS",
+                "--action", "Fix", "--description", "uppercase", "--status", "Pending Fix",
+            )
+            text = target.read_text(encoding="utf-8")
+            self.assertIn("| BUG-001 | Fix | lowercase |", text)
+            self.assertIn("| BUG-002 | Fix | uppercase |", text)
+
+    def test_add_rejects_invalid_date(self):
+        # Regression: normalize_time only shape-matched the timestamp, so a shape-valid but
+        # nonexistent date (2026-99-99 99:99) was written verbatim. It now parses for real.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            result = self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "bad date",
+                "--found-time", "2026-99-99 99:99", "--status", "待修复", check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("2026-99-99 99:99", result.stderr + result.stdout)
+            # No partial write — the bad record must not be in the file.
+            self.assertNotIn("bad date", target.read_text(encoding="utf-8"))
+
+    def test_check_flags_invalid_date(self):
+        # Regression: check validated structure/enums but not time values, so a record with
+        # 2026-99-99 99:99 passed silently. A legit single-date (date-only) file must still pass.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | bad | 2026-99-99 99:99 | - | 待修复 | - |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target), check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("2026-99-99 99:99", result.stdout + result.stderr)
+
+            single = Path(tmp) / "single.md"
+            single.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 完成日期 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | ok | 2026-06-17 | 已修复 | done |\n",
+                encoding="utf-8",
+            )
+            ok = self.run_cli("check", "--file", str(single))
+            self.assertIn("检查通过", ok.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

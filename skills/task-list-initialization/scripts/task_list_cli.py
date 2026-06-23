@@ -229,6 +229,7 @@ T = {
         "col_mismatch": "表格列数异常：第 {0} 行，期望 {1} 列，实际 {2} 列",
         "bad_action_line": "动作不在枚举中：第 {0} 行 {1}",
         "bad_status_line": "状态不在建议枚举中：第 {0} 行 {1}",
+        "bad_time_line": "时间不合法：第 {0} 行 {1}",
         "dup_id": "重复 ID：{0} 出现在行 {1}",
         "prefix_mismatch": "第 {0} 行：{1} 位于「{2}」，但该分区期望前缀 {3}-",
         "warn_sparse_notes": "{0} 条记录备注为空或仅为 -，建议补充文件、测试、来源或后续风险。",
@@ -293,6 +294,7 @@ T = {
         "col_mismatch": "Column count mismatch: line {0}, expected {1}, found {2}",
         "bad_action_line": "Action not in enum: line {0} {1}",
         "bad_status_line": "Status not in suggested enum: line {0} {1}",
+        "bad_time_line": "Invalid time: line {0} {1}",
         "dup_id": "Duplicate ID: {0} at lines {1}",
         "prefix_mismatch": "Line {0}: {1} is under \"{2}\" but this section expects prefix {3}-",
         "warn_sparse_notes": "{0} records have empty or '-' notes; add files, tests, sources, or follow-up risks.",
@@ -545,6 +547,13 @@ def find_section_by_title(title: str, sections: dict[str, dict[str, object]], lo
             return candidate
     if title in sections:
         return title
+    # Case-insensitive fallback: accept any capitalization of a heading actually in the file
+    # (e.g. "bugs" / "BUGS" -> "Bugs"). The alias table only covers some lowercase plurals,
+    # so without this the CLI reports "section not found" on natural-case English input.
+    lowered = title.strip().lower()
+    for heading in sections:
+        if heading.lower() == lowered:
+            return heading
     raise SystemExit(T[locale.name]["section_not_found"].format(title))
 
 
@@ -568,6 +577,26 @@ def local_minute_now() -> str:
     return datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")
 
 
+def _try_strptime(value: str, fmt: str) -> bool:
+    try:
+        datetime.strptime(value, fmt)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_valid_time(value: str) -> bool:
+    """True if value is "-", empty, or a real date/datetime in the task-list formats.
+
+    Accepts both the dual-schema `YYYY-MM-DD HH:MM` and the single-schema date-only
+    `YYYY-MM-DD`, but rejects shape-valid yet nonexistent dates such as 2026-99-99 99:99.
+    """
+    value = value.strip()
+    if value in ("-", ""):
+        return True
+    return any(_try_strptime(value, fmt) for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"))
+
+
 def normalize_time(value: str | None, default: str, locale: Locale | None = None) -> str:
     lang = (locale or LOCALES["zh"]).name
     if not value:
@@ -576,8 +605,13 @@ def normalize_time(value: str | None, default: str, locale: Locale | None = None
     if value == "-":
         return value
     if re.match(r"^\d{4}-\d{2}-\d{2}$", value):
-        return f"{value} 00:00"
+        value = f"{value} 00:00"
     if not re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", value):
+        raise SystemExit(T[lang]["bad_time"].format(value))
+    # Reject shape-valid but semantically invalid dates (e.g. 2026-99-99 99:99): the regex
+    # only checks the digit pattern, so without this a nonexistent month/day/hour would be
+    # written verbatim and later pass check.
+    if not _try_strptime(value, "%Y-%m-%d %H:%M"):
         raise SystemExit(T[lang]["bad_time"].format(value))
     return value
 
@@ -1212,6 +1246,14 @@ def check_text(text: str, locale: Locale, schema: str = "dual") -> list[str]:
                     status_index = -2
                     if cells[status_index] not in locale.statuses:
                         issues.append(m["bad_status_line"].format(line_no + 1, cells[status_index]))
+                if len(cells) >= 6:
+                    # Validate time cells: completed-time (cells[-3]) always; found-time
+                    # (cells[-4]) only under the dual schema. "-" / empty / real dates pass;
+                    # shape-valid but nonexistent dates (2026-99-99 99:99) are flagged.
+                    time_indices = [-3] + ([-4] if schema == "dual" else [])
+                    for tidx in time_indices:
+                        if not _is_valid_time(cells[tidx]):
+                            issues.append(m["bad_time_line"].format(line_no + 1, cells[tidx]))
 
     for item_id, locations in id_locations.items():
         if len(locations) > 1:
