@@ -893,7 +893,17 @@ def missing_sections_for_profile(
     sections: dict[str, dict[str, object]], profile: str, locale: Locale
 ) -> list[Section]:
     existing = {locale.section_aliases.get(title, title) for title in sections}
-    return [section for section in profile_sections(profile, locale) if section.title not in existing]
+    missing = [
+        section for section in profile_sections(profile, locale) if section.title not in existing
+    ]
+    if profile == "development":
+        features = locale.features_section()
+        # Replacing 功能开发/Features with the 9-column 开发事项/Development table is a
+        # semantic migration (record remap + extra columns), not a safe auto-add. If the
+        # file still has the base DEV section, do not also append dev_extended.
+        if features.title in existing and locale.dev_extended.title not in existing:
+            missing = [section for section in missing if section.title != locale.dev_extended.title]
+    return missing
 
 
 def prefix_mismatches(
@@ -1236,14 +1246,31 @@ def migrate_legacy_schema(text: str, locale: Locale) -> tuple[str, list[str], li
     return "\n".join(migrated).rstrip() + "\n", fixes, warnings
 
 
+def _summary_section_start(lines: list[str], locale: Locale) -> int | None:
+    for index, line in enumerate(lines):
+        if re.match(rf"^##\s+{re.escape(locale.summary_section)}\s*$", line):
+            return index
+    return None
+
+
 def add_missing_sections(text: str, profile: str, locale: Locale) -> tuple[str, list[str]]:
     sections = parse_sections(text)
     missing = missing_sections_for_profile(sections, profile, locale)
     if not missing:
         return text, []
     additions = "\n".join(render_table(section).rstrip() for section in missing)
-    fixed = text.rstrip() + "\n\n" + additions + "\n"
-    return fixed, [T[locale.name]["add_section_fix"].format(section.title) for section in missing]
+    fixes = [T[locale.name]["add_section_fix"].format(section.title) for section in missing]
+    lines = text.splitlines()
+    summary_start = _summary_section_start(lines, locale)
+    if summary_start is None:
+        return text.rstrip() + "\n\n" + additions + "\n", fixes
+
+    prefix = lines[:summary_start]
+    while prefix and prefix[-1] == "":
+        prefix.pop()
+    suffix = lines[summary_start:]
+    new_lines = prefix + [""] + additions.splitlines() + [""] + suffix
+    return "\n".join(new_lines).rstrip() + "\n", fixes
 
 
 def check_text(text: str, locale: Locale, schema: str = "dual") -> list[str]:

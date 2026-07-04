@@ -92,3 +92,8 @@ ipython_config.py
 # ─── 项目专属 (Project-specific) ─────────────────────────
 # 参考工作流的讨论与结构分析文档，仅本地留存，不入库
 docs/discussion/
+
+# 本项目自身的工作/配置文件，仅本地留存，不入库
+CLAUDE.md
+task-list.md
+.claude/

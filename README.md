@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-48%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-50%20passing-brightgreen.svg)](tests/)
 
 ---
 
@@ -26,7 +26,7 @@ Every project accumulates bugs, features, reviews, tests, docs, and ops work. Th
 - **Schema variants** — `check`/`standardize` auto-detect dual-date vs the legitimate legacy single-date schema (`--schema auto|dual|single`), so a single-date file in good shape passes instead of being flagged on every section. `add` matches the section's schema too, appending 6-col rows to single-date files.
 - **Schema migration** — upgrades legacy single-date columns to the Found / Done model.
 - **Maintenance-rule check** — `standardize` detects whether the project already has the session-end sync rule and Stop hook, and flags them in the report so the agent can offer to install them.
-- **Tested** — 48 unit tests covering init, add, check, summary, standardize, aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, maintenance-rule detection, schema-variant detection, timestamp validation, invalid-ID detection, non-standard-header rejection, case-insensitive section resolution, and the English locale.
+- **Tested** — 50 unit tests covering init, add, check, summary, standardize, aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, maintenance-rule detection, schema-variant detection, timestamp validation, invalid-ID detection, non-standard-header rejection, case-insensitive section resolution, and the English locale.
 
 ### The Task List Standard
 
@@ -148,7 +148,7 @@ A project may legitimately keep the **single-date schema** (`Done Date` / 6-col)
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-48 tests, all passing.
+50 tests, all passing.
 
 ### Project Structure
 
@@ -164,7 +164,6 @@ skills-task-list-initialization/
 │       └── task_list_cli.py                  # Python CLI
 ├── tests/
 │   └── test_task_list_cli.py                 # Unit tests
-├── task-list.md                              # This project's own ledger
 ├── LICENSE                                   # MIT
 └── README.md
 ```
@@ -193,7 +192,7 @@ skills-task-list-initialization/
 - **schema 变体**——`check`/`standardize` 自动识别双日期与合法的单日期 schema（`--schema auto|dual|single`），单日期的好文件能通过校验，而非每个分区都报「表头不一致」。`add` 也会按分区 schema 追加对应列数的行。
 - **结构迁移**——把旧的单日期列迁移到「发现时间 / 完成时间」。
 - **维护规则检测**——`standardize` 检查项目是否已安装会话结束同步规则与 Stop hook，并在报告中标注，由 agent 询问用户后按需安装。
-- **经过测试**——48 个单元测试，覆盖 init、add、check、summary、standardize、分区别名、反向别名、标题空白容错、`--fix-only` 语义、维护规则检测、schema 变体检测、时间戳校验、非法 ID 检测、非标准表头拒绝、分区别名大小写不敏感与英文 locale。
+- **经过测试**——50 个单元测试，覆盖 init、add、check、summary、standardize、分区别名、反向别名、标题空白容错、`--fix-only` 语义、维护规则检测、schema 变体检测、时间戳校验、非法 ID 检测、非标准表头拒绝、分区别名大小写不敏感与英文 locale。
 
 ### 任务清单标准
 
@@ -313,7 +312,7 @@ python3 skills/task-list-initialization/scripts/task_list_cli.py standardize \
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-48 个测试，全部通过。
+50 个测试，全部通过。
 
 ### 项目结构
 
@@ -329,7 +328,6 @@ skills-task-list-initialization/
 │       └── task_list_cli.py                  # 命令行工具
 ├── tests/
 │   └── test_task_list_cli.py                 # 单元测试
-├── task-list.md                              # 本项目自身任务台账
 ├── LICENSE                                   # MIT
 └── README.md
 ```

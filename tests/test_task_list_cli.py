@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -983,6 +984,43 @@ class TaskListCliTest(unittest.TestCase):
             text = target.read_text(encoding="utf-8")
             self.assertNotIn("DUPE", text)
             self.assertEqual(text.count("| BUG-001 |"), 1)
+
+    def test_standardize_apply_safe_fixes_inserts_before_summary(self):
+        # Regression BUG-020: new sections must be inserted before 统计摘要, not after it.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target), "--with-summary", "--profile", "minimal")
+
+            self.run_cli(
+                "standardize", "--file", str(target), "--profile", "extended", "--apply-safe-fixes"
+            )
+
+            text = target.read_text(encoding="utf-8")
+            summary_pos = text.find("## 统计摘要")
+            self.assertGreater(summary_pos, 0)
+            for section in ("## 规划事项", "## 优化事项", "## 调研事项"):
+                self.assertIn(section, text)
+                self.assertLess(text.find(section), summary_pos, f"{section} must precede summary")
+            headings = re.findall(r"^##\s+(.+?)\s*$", text, flags=re.MULTILINE)
+            self.assertEqual(headings[-1], "统计摘要")
+
+    def test_standardize_dev_profile_does_not_duplicate_dev_section(self):
+        # Regression BUG-021: development profile safe-fixes must not append 开发事项
+        # while 功能开发 still exists (in-place dev migration is not a safe auto-add).
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target), "--profile", "minimal")
+
+            self.run_cli(
+                "standardize", "--file", str(target), "--profile", "development", "--apply-safe-fixes"
+            )
+
+            text = target.read_text(encoding="utf-8")
+            self.assertIn("## 功能开发", text)
+            self.assertNotIn("## 开发事项", text)
+            headings = re.findall(r"^##\s+(.+?)\s*$", text, flags=re.MULTILINE)
+            dev_headings = [heading for heading in headings if heading in ("功能开发", "开发事项")]
+            self.assertEqual(len(dev_headings), 1)
 
 
 if __name__ == "__main__":
