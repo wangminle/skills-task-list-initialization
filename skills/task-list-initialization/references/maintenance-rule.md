@@ -42,7 +42,7 @@ When the user wants future agents to maintain the task-list automatically, insta
 1. 把新增条目与状态变更写入根目录 `task-list.md`，与实际进度同步；
 2. 在本次最后一条回复中告知用户：记录/更新了哪些条目（ID + 简述）。
 
-若本次未涉及任何任务完成，无需操作也无需提示。该时机由 `.claude/settings.json` 的 `Stop` hook 保证触发（每会话一次）。
+若本次未涉及任何任务完成，无需操作也无需提示。若已配置 `.claude/settings.json` 的 `Stop` hook，则由该 hook 保证每会话触发一次；**未配置时由 agent 在会话结束前自觉执行**（不要在未安装 hook 时写「由 Stop hook 保证触发」）。
 ```
 
 ### English
@@ -55,7 +55,7 @@ Before each session ends, if this session involved completing work — including
 1. Sync new entries and status changes into the root `task-list.md`, keeping it in step with actual progress;
 2. Tell the user in your final reply which entries you recorded/updated (ID + short note).
 
-If this session completed no work, do nothing and say nothing. The timing is guaranteed by the `Stop` hook in `.claude/settings.json` (once per session).
+If this session completed no work, do nothing and say nothing. If a `Stop` hook is configured in `.claude/settings.json`, that hook guarantees one trigger per session; **without a hook, the agent must run this sync on its own before ending** (do not claim a Stop-hook guarantee when none is installed).
 ```
 
 ## 3.（可选）保证层：Stop hook · Optional guarantee
@@ -108,6 +108,7 @@ python3 -c 'import json; print(json.dumps({"decision":"block","reason":"Before t
 
 - **opt-in**：默认不安装；仅当用户明确表示「希望未来 agent 维护 task-list」时才做。Off by default; install only when the user clearly wants future agents to maintain the task-list.
 - **语言一致**：规则正文与 hook `reason` 的语言必须与 `task-list.md` 一致（由 `init --lang` 决定）。Match the language of the rule text and hook `reason` to the `task-list.md` (decided by `init --lang`).
-- **记录规范**：写入 `task-list.md` 时遵循 `task-list-standard.md`（只追加、ID 不复用、8 个动作枚举、`YYYY-MM-DD HH:MM` 时间、未完成填 `-`），优先用 CLI `add` 并跑 `check` 校验。Follow `task-list-standard.md` when writing (append-only, IDs never reused, 8-action enum, `YYYY-MM-DD HH:MM` times, `-` for incomplete); prefer CLI `add` then `check`.
+- **记录规范**：写入 `task-list.md` 时遵循 `task-list-standard.md`（只追加、ID 不复用含归档、8 个动作枚举、`YYYY-MM-DD HH:MM` 时间、未完成填 `-`），优先用 CLI `add`/`update` 并跑 `check` 校验。Follow `task-list-standard.md` when writing (append-only, IDs never reused including archives, 8-action enum, `YYYY-MM-DD HH:MM` times, `-` for incomplete); prefer CLI `add`/`update` then `check`.
 - **告知用户**：安装完成后，在回复中说明写入了哪个文件、用了哪种语言、是否装了 hook、需要重启会话生效。After install, tell the user which file was written, in which language, whether the hook was added, and that a restart is needed.
 - **与 standardize 检测同源**：`standardize` 报告的「维护规则状态」分区靠固定标记判定是否已安装——在 agent 文件里查找中文标题片段 `会话结束任务同步` 或英文 `Session-end Task Sync`、在 `.claude/settings.json` 的 `Stop` hook 命令里查找 `tasklist`。这些标记就是本模板第 2、3 步正文的固定措辞，因此**不要改动标题与脚本名**；若必须改，需同步更新 `task_list_cli.py` 的 `MAINTENANCE_RULE_MARKER` / `MAINTENANCE_RULE_MARKER_EN` / `TASKLIST_HOOK_MARKER` 常量，否则检测会误报「未安装」。
+- **声明 vs 实际**：若 agent 文件写了「由 Stop hook / settings.json 保证触发」但实际未装有效 hook，`standardize` 会标「声明与实际不一致」。第 2 步规则正文已改为「有 hook 则保证 / 无 hook 则自觉」；旧项目若仍用强保证措辞，请补装 hook 或改写声明。

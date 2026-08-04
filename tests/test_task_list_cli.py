@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import re
 import subprocess
@@ -9,6 +10,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "skills" / "task-list-initialization" / "scripts" / "task_list_cli.py"
+
+
+def load_cli_module():
+    """Import task_list_cli.py as a module (for unit-testing pure helpers)."""
+    spec = importlib.util.spec_from_file_location("task_list_cli", CLI)
+    mod = importlib.util.module_from_spec(spec)
+    # dataclasses needs the module registered before exec_module.
+    sys.modules["task_list_cli"] = mod
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    return mod
 
 
 class TaskListCliTest(unittest.TestCase):
@@ -1021,6 +1033,935 @@ class TaskListCliTest(unittest.TestCase):
             headings = re.findall(r"^##\s+(.+?)\s*$", text, flags=re.MULTILINE)
             dev_headings = [heading for heading in headings if heading in ("功能开发", "开发事项")]
             self.assertEqual(len(dev_headings), 1)
+
+    def test_split_cells_accepts_missing_trailing_pipe(self):
+        # Regression: GFM/CommonMark treat the trailing | as optional. Requiring it caused
+        # split_cells to return [] → parse_sections silently skipped the row → check never
+        # saw col mismatches and standardize under-counted records (real-world: 239 vs 253).
+        cli = load_cli_module()
+        self.assertEqual(cli.split_cells("| a | b | c"), ["a", "b", "c"])
+        self.assertEqual(cli.split_cells("| a | b | c |"), ["a", "b", "c"])
+        self.assertEqual(
+            cli.split_cells("| BUG-001 | 修复 | desc | 2026-01-01 10:00 | - | 待修复 | note"),
+            ["BUG-001", "修复", "desc", "2026-01-01 10:00", "-", "待修复", "note"],
+        )
+        # Escaped pipes still decode; missing trailing | must not drop the row.
+        self.assertEqual(cli.split_cells(r"| a | b \| c"), ["a", "b | c"])
+        self.assertEqual(cli.split_cells(r"| a | b \| c |"), ["a", "b | c"])
+        # Non-table lines still return [].
+        self.assertEqual(cli.split_cells("not a table"), [])
+
+    def test_check_and_count_include_rows_without_trailing_pipe(self):
+        # A well-formed 7-col row missing only the trailing | must be counted and must NOT
+        # be reported as a column mismatch. An 8-col row (unescaped |) missing the trailing
+        # | must still surface in check — previously both were silently dropped.
+        content = (
+            "# 任务跟踪列表\n\n"
+            "## 代码 Bug\n\n"
+            "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| BUG-001 | 修复 | ok | 2026-01-01 10:00 | - | 待修复 | n |\n"
+            "| BUG-002 | 修复 | missing trail | 2026-01-01 10:00 | - | 待修复 | n\n"
+            "| BUG-003 | 修复 | extra | pipe | 2026-01-01 10:00 | - | 待修复 | n\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(content, encoding="utf-8")
+
+            cli = load_cli_module()
+            text = target.read_text(encoding="utf-8")
+            records = cli.collect_records(text)
+            self.assertEqual([cells[0] for _, _, cells in records], ["BUG-001", "BUG-002", "BUG-003"])
+            self.assertEqual([len(cells) for _, _, cells in records], [7, 7, 8])
+
+            result = self.run_cli("check", "--file", str(target), check=False)
+            combined = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0)
+            # BUG-003's unescaped | is visible; BUG-002 (missing trail only) is not a mismatch.
+            self.assertIn("期望 7 列，实际 8 列", combined)
+            self.assertIn("未转义", combined)
+            self.assertNotIn("期望 7 列，实际 7 列", combined)
+
+            std = self.run_cli("standardize", "--file", str(target), "--format", "json")
+            payload = json.loads(std.stdout)
+            self.assertEqual(payload["record_count"], 3)
+
+    # ------------------------------------------------------------------
+    # Improvement suite: claim-vs-actual, 待办, pipe escape, [[ID]],
+    # archive, status suggestions
+    # ------------------------------------------------------------------
+
+    def test_maintenance_flags_claimed_hook_without_actual(self):
+        # Docs claim Stop hook / settings.json guarantee, but neither exists → inconsistency.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            (Path(tmp) / "CLAUDE.md").write_text(
+                "## 会话结束任务同步（必须）\n\n"
+                "该时机由 `.claude/settings.json` 的 Stop hook 保证触发（每会话一次）。\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli("standardize", "--file", str(target), "--format", "json")
+            payload = json.loads(result.stdout)
+            maint = payload["maintenance"]
+            self.assertTrue(maint["rule_installed"])
+            self.assertFalse(maint["hook_installed"])
+            self.assertTrue(maint["hook_claimed"])
+            self.assertTrue(maint["claim_mismatch"])
+            md = self.run_cli("standardize", "--file", str(target))
+            self.assertIn("声明与实际不一致", md.stdout)
+            self.assertIn("Stop hook", md.stdout)
+
+    def test_maintenance_no_mismatch_when_hook_matches_claim(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            (Path(tmp) / "CLAUDE.md").write_text(
+                "## 会话结束任务同步（必须）\n\n"
+                "该时机由 `.claude/settings.json` 的 Stop hook 保证触发（每会话一次）。\n",
+                encoding="utf-8",
+            )
+            (Path(tmp) / ".claude").mkdir()
+            (Path(tmp) / ".claude" / "settings.json").write_text(
+                json.dumps({
+                    "hooks": {
+                        "Stop": [
+                            {"matcher": "", "hooks": [
+                                {"type": "command", "command": "bash .claude/hooks/tasklist_sync_reminder.sh"}
+                            ]}
+                        ]
+                    }
+                }),
+                encoding="utf-8",
+            )
+            result = self.run_cli("standardize", "--file", str(target), "--format", "json")
+            maint = json.loads(result.stdout)["maintenance"]
+            self.assertTrue(maint["hook_claimed"])
+            self.assertTrue(maint["hook_installed"])
+            self.assertFalse(maint["claim_mismatch"])
+
+    def test_add_and_check_accept_generic_todo_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target), "--profile", "extended")
+            self.run_cli(
+                "add", "--file", str(target), "--section", "文档维护",
+                "--action", "文档", "--description", "更新 README",
+                "--status", "待办", "--notes", "通用待办",
+            )
+            check = self.run_cli("check", "--file", str(target))
+            self.assertEqual(check.returncode, 0)
+            self.assertIn("待办", target.read_text(encoding="utf-8"))
+
+    def test_add_accepts_english_todo_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--lang", "en", "--output", str(target))
+            self.run_cli(
+                "add", "--file", str(target), "--section", "Docs",
+                "--action", "Doc", "--description", "Update README",
+                "--status", "Todo",
+            )
+            self.assertEqual(self.run_cli("check", "--file", str(target)).returncode, 0)
+
+    def test_apply_safe_fixes_escapes_unescaped_pipes_in_notes(self):
+        # Unescaped | in 备注 splits the row; --apply-safe-fixes must merge+escape.
+        content = (
+            "# 任务跟踪列表\n\n"
+            "## 代码 Bug\n\n"
+            "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| BUG-001 | 修复 | ok | 2026-01-01 10:00 | - | 待修复 | a | b |\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(content, encoding="utf-8")
+            before = self.run_cli("check", "--file", str(target), check=False)
+            self.assertNotEqual(before.returncode, 0)
+            self.assertIn("列数异常", before.stdout + before.stderr)
+
+            self.run_cli(
+                "standardize", "--file", str(target),
+                "--apply-safe-fixes", "--fix-only",
+            )
+            text = target.read_text(encoding="utf-8")
+            self.assertIn(r"a \| b", text)
+            after = self.run_cli("check", "--file", str(target))
+            self.assertEqual(after.returncode, 0)
+
+    def test_check_reports_dangling_wiki_id_refs(self):
+        content = (
+            "# 任务跟踪列表\n\n"
+            "## 代码 Bug\n\n"
+            "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| BUG-001 | 修复 | linked | 2026-01-01 10:00 | - | 待修复 | see [[DOC-036]] and [[BUG-001]] |\n"
+            "## 文档维护\n\n"
+            "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(content, encoding="utf-8")
+            result = self.run_cli("check", "--file", str(target), check=False)
+            combined = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("悬空引用", combined)
+            self.assertIn("DOC-036", combined)
+            self.assertNotIn("[[BUG-001]]", combined)  # self-ref exists
+
+    def test_check_passes_valid_wiki_id_refs(self):
+        content = (
+            "# 任务跟踪列表\n\n"
+            "## 代码 Bug\n\n"
+            "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| BUG-001 | 修复 | a | 2026-01-01 10:00 | 2026-01-02 10:00 | 已修复 | [[DEV-001]] |\n"
+            "## 功能开发\n\n"
+            "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| DEV-001 | 开发 | b | 2026-01-01 10:00 | - | 待办 | from [[BUG-001]] |\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(content, encoding="utf-8")
+            self.assertEqual(self.run_cli("check", "--file", str(target)).returncode, 0)
+
+    def test_archive_moves_old_completed_records(self):
+        content = (
+            "# 任务跟踪列表\n\n"
+            "## 代码 Bug\n\n"
+            "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| BUG-001 | 修复 | old done | 2026-01-01 10:00 | 2026-01-02 10:00 | 已修复 | n |\n"
+            "| BUG-002 | 修复 | recent done | 2026-07-01 10:00 | 2026-07-02 10:00 | 已修复 | n |\n"
+            "| BUG-003 | 修复 | still open | 2026-01-01 10:00 | - | 待修复 | n |\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(content, encoding="utf-8")
+            archive = Path(tmp) / "task-list-archive-202601.md"
+            result = self.run_cli(
+                "archive", "--file", str(target),
+                "--older-than-days", "30",
+                "--as-of", "2026-07-11",
+                "--output", str(archive),
+            )
+            self.assertEqual(result.returncode, 0)
+            main = target.read_text(encoding="utf-8")
+            archived = archive.read_text(encoding="utf-8")
+            self.assertNotIn("BUG-001", main)
+            self.assertIn("BUG-002", main)
+            self.assertIn("BUG-003", main)
+            self.assertIn("BUG-001", archived)
+            self.assertNotIn("BUG-002", archived)
+            self.assertNotIn("BUG-003", archived)
+
+    def test_check_suggests_mapping_for_nonstandard_status(self):
+        content = (
+            "# 任务跟踪列表\n\n"
+            "## 文档维护\n\n"
+            "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| DOC-001 | 文档 | x | 2026-01-01 10:00 | - | 待处理 | n |\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(content, encoding="utf-8")
+            result = self.run_cli("check", "--file", str(target), check=False)
+            combined = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("待处理", combined)
+            self.assertIn("建议", combined)
+            self.assertTrue("待办" in combined or "待开发" in combined)
+
+    # ------------------------------------------------------------------
+    # CLI ergonomics: update, auto-check, file/stdin/JSON, sections
+    # ------------------------------------------------------------------
+
+    def test_update_status_and_completed_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "登录无响应",
+                "--found-time", "2026-08-04 10:00", "--completed-time", "-",
+                "--status", "进行中", "--notes", "排查中", "--no-check",
+            )
+            result = self.run_cli(
+                "update", "--file", str(target), "--id", "BUG-001",
+                "--status", "已修复",
+                "--completed-time", "2026-08-04 16:00",
+            )
+            self.assertIn("已更新：BUG-001", result.stdout)
+            text = target.read_text(encoding="utf-8")
+            self.assertIn(
+                "| BUG-001 | 修复 | 登录无响应 | 2026-08-04 10:00 | 2026-08-04 16:00 | 已修复 | 排查中 |",
+                text,
+            )
+
+    def test_update_notes_append(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "x",
+                "--status", "进行中", "--notes", "初诊", "--no-check",
+            )
+            self.run_cli(
+                "update", "--file", str(target), "--id", "BUG-001",
+                "--notes-append", "测试通过",
+            )
+            text = target.read_text(encoding="utf-8")
+            self.assertIn("初诊；测试通过", text)
+
+    def test_update_rejects_unknown_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            result = self.run_cli(
+                "update", "--file", str(target), "--id", "BUG-999",
+                "--status", "已修复", check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("BUG-999", result.stdout + result.stderr)
+
+    def test_add_auto_checks_and_rolls_back_on_failure(self):
+        # Pre-existing invalid time makes post-write check fail; add must not leave the new row.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | ok | 2026-01-01 10:00 | - | 待修复 | - |\n"
+                "| BUG-002 | 修复 | broken | 2026-99-99 99:99 | - | 待修复 | - |\n",
+                encoding="utf-8",
+            )
+            before = target.read_text(encoding="utf-8")
+            result = self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "新条目", "--status", "待修复",
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(before, target.read_text(encoding="utf-8"))
+            self.assertNotIn("新条目", target.read_text(encoding="utf-8"))
+
+    def test_add_no_check_skips_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            result = self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "skip check",
+                "--status", "待修复", "--no-check",
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("已追加：BUG-001", result.stdout)
+            # Default path would also print check_ok; --no-check must not.
+            self.assertNotIn("检查通过", result.stdout)
+
+    def test_add_notes_file_avoids_shell_escaping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            notes_file = Path(tmp) / "notes.txt"
+            notes_file.write_text('含"引号"；分号; 与 | 竖线', encoding="utf-8")
+            self.run_cli("init", "--output", str(target))
+            self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "转义场景",
+                "--status", "待修复", "--notes-file", str(notes_file),
+            )
+            text = target.read_text(encoding="utf-8")
+            self.assertIn(r'含"引号"；分号; 与 \| 竖线', text)
+
+    def test_add_from_json_batch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            entries = Path(tmp) / "entries.json"
+            entries.write_text(
+                json.dumps(
+                    [
+                        {
+                            "section": "代码 Bug",
+                            "action": "修复",
+                            "description": "批量 bug",
+                            "status": "待修复",
+                            "notes": "n1",
+                            "found_time": "2026-08-04 10:00",
+                            "completed_time": "-",
+                        },
+                        {
+                            "section": "调整事项",
+                            "action": "调整",
+                            "description": "批量调整",
+                            "status": "已完成",
+                            "notes": "n2",
+                            "found_time": "2026-08-04 11:00",
+                            "completed_time": "2026-08-04 12:00",
+                        },
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            self.run_cli("init", "--output", str(target))
+            result = self.run_cli(
+                "add", "--file", str(target), "--from-json", str(entries),
+            )
+            self.assertIn("BUG-001", result.stdout)
+            self.assertIn("ADJ-001", result.stdout)
+            text = target.read_text(encoding="utf-8")
+            self.assertIn("| BUG-001 | 修复 | 批量 bug |", text)
+            self.assertIn("| ADJ-001 | 调整 | 批量调整 |", text)
+
+    def test_sections_lists_headings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target), "--profile", "extended")
+            result = self.run_cli("sections", "--file", str(target))
+            for title in ("代码 Bug", "调整事项", "调研事项", "配置运维"):
+                self.assertIn(title, result.stdout)
+
+    def test_sections_json_format(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            result = self.run_cli("sections", "--file", str(target), "--format", "json")
+            payload = json.loads(result.stdout)
+            titles = [s["title"] for s in payload["sections"]]
+            self.assertIn("代码 Bug", titles)
+            self.assertTrue(any(s.get("prefix") == "BUG" for s in payload["sections"]))
+
+    def test_add_unknown_section_lists_available(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            result = self.run_cli(
+                "add", "--file", str(target), "--section", "不存在的分区",
+                "--action", "修复", "--description", "x", "--status", "待修复",
+                check=False,
+            )
+            combined = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("未找到分区", combined)
+            self.assertIn("代码 Bug", combined)
+            self.assertIn("配置运维", combined)
+
+    # ------------------------------------------------------------------
+    # Round-2 ergonomics: summary sync, aliases, errors, list, dry-run
+    # ------------------------------------------------------------------
+
+    def test_add_syncs_summary_when_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target), "--with-summary")
+            self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "a",
+                "--status", "已修复", "--found-time", "2026-08-04 10:00",
+                "--completed-time", "2026-08-04 11:00",
+            )
+            text = target.read_text(encoding="utf-8")
+            self.assertIn("| 代码 Bug | 1 | 1 | 0 | 100% |", text)
+            self.assertIn("| **总计** | 1 | 1 | 0 | 100% |", text)
+
+    def test_add_no_sync_summary_leaves_zeros(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target), "--with-summary")
+            self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "a",
+                "--status", "待修复", "--no-sync-summary",
+            )
+            text = target.read_text(encoding="utf-8")
+            self.assertIn("| 代码 Bug | 0 | 0 | 0 | 0% |", text)
+
+    def test_check_reports_stale_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target), "--with-summary")
+            self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "a",
+                "--status", "待修复", "--no-sync-summary",
+            )
+            result = self.run_cli("check", "--file", str(target), check=False)
+            combined = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("摘要", combined)
+            self.assertIn("代码 Bug", combined)
+
+    def test_bad_action_lists_allowed_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            result = self.run_cli(
+                "add", "--file", str(target), "--section", "配置运维",
+                "--action", "部署", "--description", "x", "--status", "待办",
+                check=False,
+            )
+            combined = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("部署", combined)
+            self.assertIn("运维", combined)
+            self.assertIn("修复", combined)
+
+    def test_section_prefix_aliases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target), "--profile", "extended")
+            for section, expect_prefix in (
+                ("CHK", "CHK-001"),
+                ("ADJ", "ADJ-001"),
+                ("TST", "TST-001"),
+                ("检查", "CHK-002"),
+                ("调整", "ADJ-002"),
+                ("测试", "TST-002"),
+                ("PLN", "PLN-001"),
+                ("RES", "RES-001"),
+                ("规划", "PLN-002"),
+                ("调研", "RES-002"),
+            ):
+                result = self.run_cli(
+                    "add", "--file", str(target), "--section", section,
+                    "--action", "检查" if expect_prefix.startswith(("CHK", "RES")) else (
+                        "规划" if expect_prefix.startswith("PLN") else (
+                            "调整" if expect_prefix.startswith("ADJ") else "检查"
+                        )
+                    ),
+                    "--description", f"via {section}",
+                    "--status", "待办",
+                )
+                self.assertIn(f"已追加：{expect_prefix}", result.stdout)
+
+    def test_list_filters_by_status_and_keyword(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "sqlite 锁",
+                "--status", "待修复", "--notes", "db",
+            )
+            self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "其他",
+                "--status", "已修复",
+                "--found-time", "2026-08-04 10:00",
+                "--completed-time", "2026-08-04 11:00",
+            )
+            result = self.run_cli(
+                "list", "--file", str(target), "--status", "待修复", "--keyword", "sqlite",
+            )
+            self.assertIn("BUG-001", result.stdout)
+            self.assertNotIn("BUG-002", result.stdout)
+            by_id = self.run_cli("list", "--file", str(target), "--id", "BUG-002", "--format", "json")
+            payload = json.loads(by_id.stdout)
+            self.assertEqual(len(payload["records"]), 1)
+            self.assertEqual(payload["records"][0]["id"], "BUG-002")
+
+    def test_add_dry_run_prints_only_new_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            result = self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "dry",
+                "--status", "待修复", "--dry-run",
+            )
+            self.assertIn("| BUG-001 |", result.stdout)
+            self.assertNotIn("# 任务跟踪列表", result.stdout)
+            self.assertNotIn("## 调整事项", result.stdout)
+            # file untouched (template notes mention [[BUG-001]] wiki syntax — match a table row)
+            self.assertNotIn("| BUG-001 |", target.read_text(encoding="utf-8"))
+
+    def test_install_maintenance_rule_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            result = self.run_cli("install-maintenance", "--file", str(target))
+            self.assertIn("CLAUDE.md", result.stdout)
+            claude = (Path(tmp) / "CLAUDE.md").read_text(encoding="utf-8")
+            self.assertIn("会话结束任务同步", claude)
+            # second run is idempotent
+            again = self.run_cli("install-maintenance", "--file", str(target))
+            self.assertIn("已安装", again.stdout)
+            self.assertEqual(claude.count("会话结束任务同步"), 1)
+
+    def test_archive_refuses_output_same_as_file(self):
+        # Archiving into the main file would overwrite then wipe records while reporting success.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 文档维护\n\n"
+                "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| DOC-001 | 文档 | old | 2026-01-01 10:00 | 2026-01-02 10:00 | 已完成 | n |\n",
+                encoding="utf-8",
+            )
+            before = target.read_text(encoding="utf-8")
+            result = self.run_cli(
+                "archive", "--file", str(target), "--older-than-days", "30",
+                "--as-of", "2026-08-04", "--output", str(target), check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("相同", result.stdout + result.stderr)
+            self.assertEqual(before, target.read_text(encoding="utf-8"))
+
+    def test_install_maintenance_refuses_invalid_settings_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            settings = Path(tmp) / ".claude" / "settings.json"
+            settings.parent.mkdir(parents=True)
+            settings.write_text("{not-json KEEPME", encoding="utf-8")
+            result = self.run_cli(
+                "install-maintenance", "--file", str(target), "--with-hook", check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("JSON", result.stdout + result.stderr)
+            self.assertEqual("{not-json KEEPME", settings.read_text(encoding="utf-8"))
+
+    def test_migrate_schema_refuses_reordered_dual_header(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            content = (
+                "# 任务跟踪列表\n\n"
+                "## 文档维护\n\n"
+                "| ID | 状态 | 动作 | 事项 | 发现时间 | 完成时间 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| DOC-001 | 待办 | 文档 | 说明 | 2026-08-01 10:00 | - | n |\n"
+            )
+            target.write_text(content, encoding="utf-8")
+            result = self.run_cli(
+                "standardize", "--file", str(target), "--migrate-schema", "--fix-only",
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("无法迁移", result.stdout + result.stderr)
+            self.assertEqual(content, target.read_text(encoding="utf-8"))
+
+    def test_add_rejects_invalid_and_cross_prefix_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            bad = self.run_cli(
+                "add", "--file", str(target), "--section", "文档维护",
+                "--id", "FOO", "--action", "文档", "--description", "x", "--status", "待办",
+                check=False,
+            )
+            self.assertNotEqual(bad.returncode, 0)
+            self.assertIn("FOO", bad.stdout + bad.stderr)
+            cross = self.run_cli(
+                "add", "--file", str(target), "--section", "文档维护",
+                "--id", "BUG-999", "--action", "文档", "--description", "y", "--status", "待办",
+                check=False,
+            )
+            self.assertNotEqual(cross.returncode, 0)
+            self.assertIn("BUG-999", cross.stdout + cross.stderr)
+            self.assertNotIn("| FOO |", target.read_text(encoding="utf-8"))
+            self.assertNotIn("| BUG-999 |", target.read_text(encoding="utf-8"))
+
+    def test_update_status_demotion_clears_completed_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            self.run_cli(
+                "add", "--file", str(target), "--section", "文档维护",
+                "--action", "文档", "--description", "d", "--status", "已完成",
+                "--found-time", "2026-08-01 10:00", "--completed-time", "2026-08-01 11:00",
+            )
+            result = self.run_cli(
+                "update", "--file", str(target), "--id", "DOC-001", "--status", "待办",
+            )
+            self.assertEqual(result.returncode, 0)
+            text = target.read_text(encoding="utf-8")
+            self.assertIn("| DOC-001 | 文档 | d | 2026-08-01 10:00 | - | 待办 |", text)
+            self.assertNotIn("| 2026-08-01 11:00 | 待办 |", text)
+
+    def test_update_priority_rejects_when_column_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            self.run_cli(
+                "add", "--file", str(target), "--section", "文档维护",
+                "--action", "文档", "--description", "p", "--status", "待办",
+            )
+            before = target.read_text(encoding="utf-8")
+            result = self.run_cli(
+                "update", "--file", str(target), "--id", "DOC-001", "--priority", "P0",
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("--priority", result.stdout + result.stderr)
+            self.assertEqual(before, target.read_text(encoding="utf-8"))
+
+    def test_install_maintenance_cross_file_idempotent(self):
+        # Rule already in AGENTS.md must not be duplicated into CLAUDE.md.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            (Path(tmp) / "AGENTS.md").write_text(
+                "## 会话结束任务同步\n\nalready here\n", encoding="utf-8"
+            )
+            (Path(tmp) / "CLAUDE.md").write_text("# project\n", encoding="utf-8")
+            result = self.run_cli("install-maintenance", "--file", str(target))
+            self.assertIn("AGENTS.md", result.stdout)
+            self.assertNotIn("会话结束任务同步", (Path(tmp) / "CLAUDE.md").read_text(encoding="utf-8"))
+
+    def test_archive_syncs_existing_summary(self):
+        # Archiving rows out of a file with 统计摘要 must leave the summary in step,
+        # otherwise the next check reports 摘要表过期.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target), "--with-summary")
+            self.run_cli(
+                "add", "--file", str(target), "--section", "文档维护",
+                "--action", "文档", "--description", "old", "--status", "已完成",
+                "--found-time", "2026-01-01 10:00", "--completed-time", "2026-01-02 10:00",
+            )
+            self.run_cli(
+                "add", "--file", str(target), "--section", "文档维护",
+                "--action", "文档", "--description", "new", "--status", "待办",
+            )
+            result = self.run_cli(
+                "archive", "--file", str(target), "--older-than-days", "30",
+                "--as-of", "2026-08-04",
+            )
+            self.assertIn("已归档 1 条", result.stdout)
+            check = self.run_cli("check", "--file", str(target))
+            self.assertIn("检查通过", check.stdout)
+
+    def test_archive_merges_into_existing_archive_section(self):
+        # A second same-month archive run must merge rows into the existing section
+        # instead of appending a duplicate ## 文档维护 block.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            archive = Path(tmp) / "archive.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 文档维护\n\n"
+                "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| DOC-001 | 文档 | first | 2026-01-01 10:00 | 2026-01-02 10:00 | 已完成 | n |\n",
+                encoding="utf-8",
+            )
+            self.run_cli(
+                "archive", "--file", str(target), "--older-than-days", "30",
+                "--as-of", "2026-08-04", "--output", str(archive),
+            )
+            self.run_cli(
+                "add", "--file", str(target), "--section", "文档维护",
+                "--action", "文档", "--description", "second", "--status", "已完成",
+                "--found-time", "2026-01-03 10:00", "--completed-time", "2026-01-04 10:00",
+            )
+            self.run_cli(
+                "archive", "--file", str(target), "--older-than-days", "30",
+                "--as-of", "2026-08-04", "--output", str(archive),
+            )
+            text = archive.read_text(encoding="utf-8")
+            self.assertEqual(text.count("## 文档维护"), 1)
+            self.assertIn("first", text)
+            self.assertIn("second", text)
+
+    def test_install_maintenance_hook_script_names_actual_agent_file(self):
+        # The Stop-hook reminder must reference the file the rule actually lives in.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            (Path(tmp) / "AGENTS.md").write_text("# project\n", encoding="utf-8")
+            self.run_cli("install-maintenance", "--file", str(target), "--with-hook")
+            script = (Path(tmp) / ".claude" / "hooks" / "tasklist_sync_reminder.sh").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("AGENTS.md", script)
+            self.assertNotIn("CLAUDE.md 的", script)
+
+    def test_check_flags_incomplete_status_with_completed_time(self):
+        # check must catch the 状态/完成时间 contradiction instead of letting it pass.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 文档维护\n\n"
+                "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| DOC-001 | 文档 | x | 2026-01-01 10:00 | 2026-01-02 10:00 | 待办 | n |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target), check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("待办", result.stdout)
+
+    def test_detect_locale_ignores_english_mentions_in_notes(self):
+        # Notes mentioning "# Task Tracking List" / "## Docs" must not flip a zh file to en.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "x", "--status", "待修复",
+                "--notes", "参考模板 # Task Tracking List 和 ## Docs",
+            )
+            result = self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "y", "--status", "待修复",
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("| BUG-002 |", target.read_text(encoding="utf-8"))
+            check = self.run_cli("check", "--file", str(target))
+            self.assertIn("检查通过", check.stdout)
+
+    def test_next_id_does_not_reuse_archived_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | a | 2026-01-01 10:00 | - | 待修复 | n |\n"
+                "| BUG-002 | 修复 | b | 2026-01-01 10:00 | 2026-01-02 10:00 | 已修复 | n |\n",
+                encoding="utf-8",
+            )
+            self.run_cli(
+                "archive", "--file", str(target), "--older-than-days", "30",
+                "--as-of", "2026-08-04",
+            )
+            self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "new", "--status", "待修复",
+            )
+            text = target.read_text(encoding="utf-8")
+            self.assertIn("| BUG-003 | 修复 | new |", text)
+            self.assertNotIn("| BUG-002 | 修复 | new |", text)
+
+    def test_standardize_survives_malformed_short_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli("standardize", "--file", str(target), check=False)
+            combined = result.stdout + result.stderr
+            self.assertNotIn("Traceback", combined)
+            self.assertNotIn("IndexError", combined)
+
+    def test_archive_survives_id_only_header(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID |\n"
+                "| --- |\n"
+                "| BUG-001 |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli(
+                "archive", "--file", str(target), "--older-than-days", "1",
+                "--as-of", "2026-08-04", check=False,
+            )
+            combined = result.stdout + result.stderr
+            self.assertNotIn("Traceback", combined)
+            self.assertNotIn("IndexError", combined)
+
+    def test_update_found_time_rejects_single_date_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 文档维护\n\n"
+                "| ID | 动作 | 事项 | 完成日期 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- |\n"
+                "| DOC-001 | 文档 | x | 2026-08-01 | 待办 | n |\n",
+                encoding="utf-8",
+            )
+            before = target.read_text(encoding="utf-8")
+            result = self.run_cli(
+                "update", "--file", str(target), "--id", "DOC-001",
+                "--found-time", "2026-08-02 10:00", check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("--found-time", result.stdout + result.stderr)
+            self.assertEqual(before, target.read_text(encoding="utf-8"))
+
+    def test_insert_row_respects_tab_heading_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n\n"
+                "##\t文档维护\n\n"
+                "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n",
+                encoding="utf-8",
+            )
+            self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "z", "--status", "待修复",
+                "--no-check",
+            )
+            text = target.read_text(encoding="utf-8")
+            bug_pos = text.find("| BUG-001 |")
+            doc_pos = text.find("##\t文档维护")
+            self.assertGreater(bug_pos, 0)
+            self.assertLess(bug_pos, doc_pos)
+
+    def test_install_maintenance_rejects_hooks_null_and_stop_dict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            settings = Path(tmp) / ".claude" / "settings.json"
+            settings.parent.mkdir(parents=True)
+            settings.write_text('{"hooks": {"Stop": {}}}\n', encoding="utf-8")
+            result = self.run_cli(
+                "install-maintenance", "--file", str(target), "--with-hook", check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("Traceback", result.stdout + result.stderr)
+            self.assertFalse(
+                (Path(tmp) / ".claude" / "hooks" / "tasklist_sync_reminder.sh").exists()
+            )
+            # hooks:null is normalized and install proceeds
+            settings.write_text('{"hooks": null}\n', encoding="utf-8")
+            ok = self.run_cli(
+                "install-maintenance", "--file", str(target), "--with-hook",
+            )
+            self.assertEqual(ok.returncode, 0)
+            loaded = json.loads(settings.read_text(encoding="utf-8"))
+            self.assertIsInstance(loaded["hooks"]["Stop"], list)
+
+    def test_check_schema_single_flags_dual_dev_header(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 开发事项\n\n"
+                "| ID | 动作 | 事项 | 优先级 | 预计时间 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+                "| DEV-001 | 开发 | x | P1 | 1d | 2026-08-01 10:00 | - | 待开发 | n |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli(
+                "check", "--file", str(target), "--schema", "single", check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("开发事项", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

@@ -1,10 +1,13 @@
 # Task List Initialization · 任务清单初始化
 
+**Version:** `V0.3.0-Build0211-20260804`
+
 **[English](#english)** | **[中文](#中文)**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-V0.3.0-blue.svg)](VERSION)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-50%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-98%20passing-brightgreen.svg)](tests/)
 
 ---
 
@@ -20,13 +23,17 @@ Every project accumulates bugs, features, reviews, tests, docs, and ops work. Th
 
 - **One standard, four profiles** — `minimal`, `planning`, `extended`, `development`.
 - **Bilingual** — Chinese (Simplified, default) and English task-lists; `init --lang` picks the language, other commands auto-detect it from the file.
-- **CLI tooling** — generate, append, validate, summarize, and standardize via `task_list_cli.py`.
+- **CLI tooling** — generate, append, update, validate, summarize, and standardize via `task_list_cli.py`.
 - **Report-first standardization** — diagnoses before it edits; repairs only with explicit flags.
-- **Safe `add` / strict `check`** — `check` flags malformed IDs (e.g. `bug-001`, `BUG-12`) and invalid timestamps instead of silently skipping them; `add` refuses to write into a section whose header does not match a recognized schema (e.g. a reordered `ID / Status / Action / …`) rather than guessing the column layout and corrupting data. An explicit `--id` that already exists is also refused, instead of silently creating a duplicate.
-- **Schema variants** — `check`/`standardize` auto-detect dual-date vs the legitimate legacy single-date schema (`--schema auto|dual|single`), so a single-date file in good shape passes instead of being flagged on every section. `add` matches the section's schema too, appending 6-col rows to single-date files.
-- **Schema migration** — upgrades legacy single-date columns to the Found / Done model.
-- **Maintenance-rule check** — `standardize` detects whether the project already has the session-end sync rule and Stop hook, and flags them in the report so the agent can offer to install them.
-- **Tested** — 50 unit tests covering init, add, check, summary, standardize, aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, maintenance-rule detection, schema-variant detection, timestamp validation, invalid-ID detection, non-standard-header rejection, case-insensitive section resolution, and the English locale.
+- **Safe `add` / `update` / strict `check`** — `add`/`update` auto-check after write (rollback on failure); `--notes-file` / `--from-json` avoid shell escaping; `update --id` patches status/notes/times in place. `check` flags malformed IDs and invalid timestamps; `add` refuses non-standard headers rather than guessing column layout.
+- **Schema variants** — `check`/`standardize` auto-detect dual-date vs the supported single-date schema (`--schema auto|dual|single`). The supported single-date shape is **`Done Date` / `完成日期`** (6-col, or 8-col development). Historical labels such as `Found Date` / `发现日期`, `Start Date`, or `Plan Date` are **not** accepted by `check`/`add` today (known gap; tracked for a later release). `add` matches a section's recognized schema and appends the matching column count.
+- **Schema migration** — `--migrate-schema` upgrades supported 6/8-col single-date headers (including a `Found Date` / `发现日期` alias on that path only) toward Found / Done. **Caution:** day-only values are currently padded to `00:00`, and completed rows may copy one date into both Found and Done — do not run it on important historical ledgers without reviewing the dry-run / report first.
+- **Maintenance-rule check** — `standardize` detects the session-end sync rule and Stop hook, and flags **claim vs actual** mismatches (docs assert a Stop-hook guarantee but none is installed).
+- **Generic Todo status** — `待办` / `Todo` for non-bug open work; non-standard statuses get suggested mappings.
+- **Safe pipe escape** — `--apply-safe-fixes` can merge/escape unescaped `|` in overwide rows.
+- **Wiki cross-refs** — `[[BUG-001]]` syntax with dangling-reference detection in `check`.
+- **Archive** — `archive --older-than-days N` moves old completed rows to `task-list-archive-YYYYMM.md`.
+- **Tested** — 98 unit tests covering init, add, update, list, sections, from-json, notes-file, auto-check rollback, check, summary, standardize, archive, install-maintenance, aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, maintenance-rule detection (including claim mismatch and cross-file idempotence), schema-variant detection, timestamp validation, invalid-ID detection, non-standard-header rejection, archive ID non-reuse, pipe escape, wiki refs, status suggestions, case-insensitive section resolution, and the English locale.
 
 ### The Task List Standard
 
@@ -70,50 +77,70 @@ The `Action` field must be one of 8 values; near-synonyms are merged:
 
 #### Statuses
 
-`Pending Fix` · `Fixed` · `Pending Dev` · `In Progress` · `Done` · `Resolved` · `Closed`
+`Pending Fix` · `Fixed` · `Todo` · `Pending Dev` · `In Progress` · `Done` · `Resolved` · `Closed`
 
-Bug completion uses `Fixed`; non-bug completion uses `Done`. The four terminal states (`Fixed` / `Done` / `Resolved` / `Closed`) all count as completed.
+Bug completion uses `Fixed`; non-bug completion uses `Done`. Prefer `Todo` for generic open non-bug work (docs/ops/reviews/…). The four terminal states (`Fixed` / `Done` / `Resolved` / `Closed`) all count as completed.
 
 ### CLI
 
-`task_list_cli.py` is a single-file, **stdlib-only** Python 3.8+ tool. On Windows, replace `python3` with `python`.
+`task_list_cli.py` is a **stdlib-only** Python 3.8+ CLI (implementation lives under `scripts/_tasklist/`). On Windows, replace `python3` with `python`.
 
 | Command | Purpose |
 | --- | --- |
 | `init` | Generate a template |
-| `add` | Append a record to a section |
+| `add` | Append one or more records (`--from-json`, `--notes-file`; auto-checks after write) |
+| `update` | Patch an existing record by `--id` (status, notes-append, times, …) |
+| `list` | Filter records by `--id` / `--status` / `--section` / `--keyword` |
+| `sections` | List section headings (`--format json`) |
 | `check` | Validate ID format, structure, enums & timestamps |
-| `summary` | Count records; `--write` rewrites the summary table |
+| `summary` | Count records by section; `--write` rewrites the summary table (section-based counts — see note below) |
 | `standardize` | Diagnose and optionally repair |
+| `archive` | Move old completed rows to an archive file |
+| `install-maintenance` | Install session-end sync rule (opt-in; `--with-hook` for Stop hook) |
 
 ```bash
+SKILL_CLI=skills/task-list-initialization/scripts/task_list_cli.py
+# After install under ~/.claude/skills/: SKILL_CLI=$SKILL_DIR/scripts/task_list_cli.py
+
 # Generate a task list (Chinese by default)
-python3 skills/task-list-initialization/scripts/task_list_cli.py init --output task-list.md
+python3 "$SKILL_CLI" init --output task-list.md
 
 # English template, extended profile + summary
-python3 skills/task-list-initialization/scripts/task_list_cli.py init \
+python3 "$SKILL_CLI" init \
   --lang en --profile extended --with-summary --output task-list.md
 
 # Append a record (section/action/status labels follow the file's language)
-python3 skills/task-list-initialization/scripts/task_list_cli.py add \
+python3 "$SKILL_CLI" add \
   --file task-list.md --section "Bugs" --action Fix \
   --description "Login fails" --status "Pending Fix" --notes "Reproduced locally"
 
-# Validate
-python3 skills/task-list-initialization/scripts/task_list_cli.py check --file task-list.md
+# Batch add / long notes without shell escaping
+python3 "$SKILL_CLI" add --file task-list.md --from-json entries.json
+python3 "$SKILL_CLI" add --file task-list.md --section "Bugs" --action Fix \
+  --description "x" --status "Pending Fix" --notes-file notes.txt
+
+# Update status / append notes
+python3 "$SKILL_CLI" update --file task-list.md --id BUG-001 \
+  --status Fixed --completed-time "2026-08-04 16:00" --notes-append "Verified"
+
+# List / install maintenance / validate
+python3 "$SKILL_CLI" list --file task-list.md --status "Pending Fix"
+python3 "$SKILL_CLI" sections --file task-list.md --format json
+python3 "$SKILL_CLI" install-maintenance --file task-list.md
+python3 "$SKILL_CLI" check --file task-list.md
 
 # Validate a single-date (legacy) file against its own schema
-python3 skills/task-list-initialization/scripts/task_list_cli.py check --file task-list.md --schema single
+python3 "$SKILL_CLI" check --file task-list.md --schema single
 
-# Recompute & write the summary table
-python3 skills/task-list-initialization/scripts/task_list_cli.py summary --file task-list.md --write
+# Recompute & write the summary table (counts by physical section)
+python3 "$SKILL_CLI" summary --file task-list.md --write
 
 # Diagnose an existing list (report only, no edits)
-python3 skills/task-list-initialization/scripts/task_list_cli.py standardize \
-  --file task-list.md --report docs/task-list-standardize-report.md
+python3 "$SKILL_CLI" standardize \
+  --file task-list.md --report task-list-standardize-report.md
 ```
 
-`init --lang {zh,en}` selects the language (`zh` = Simplified Chinese, default; `en` = English). `add`/`check`/`summary`/`standardize` auto-detect the language from the target file, so no `--lang` is needed for them. `check`/`standardize` accept `--schema {auto,dual,single}` (default `auto`) to validate a file that intentionally keeps the legacy single-date schema. `add` also matches the target section's schema and emits the corresponding column count. `check` flags malformed IDs (`bug-001`) and invalid timestamps; `add` refuses a section whose header does not match a recognized schema (e.g. reordered columns) rather than guessing — run `standardize --migrate-schema` or fix the header first. Run `--help` on any subcommand for the full option list.
+`init --lang {zh,en}` selects the language (`zh` = Simplified Chinese, default; `en` = English). `add`/`update`/`check`/`summary`/`standardize` auto-detect the language from the target file, so no `--lang` is needed for them. `add`/`update` auto-run `check` after writing (rollback on failure; `--no-check` to skip). `check`/`standardize` accept `--schema {auto,dual,single}` (default `auto`) to validate a file that intentionally keeps the supported single-date schema (`Done Date` / `完成日期`). `add` also matches the target section's recognized schema and emits the corresponding column count. `check` flags malformed IDs (`bug-001`) and invalid timestamps; `add` refuses a section whose header does not match a recognized schema (e.g. reordered columns, or historical `Found Date` / `发现日期` headers) rather than guessing — fix the header manually, or use `--migrate-schema` only for a supported 6/8-col single-date legacy schema after reviewing the report. `summary --write` aggregates by **physical section**, not ID prefix; if a historical file counted by prefix and has misplaced rows, review before rewriting. Run `--help` on any subcommand for the full option list.
 
 ### Profiles
 
@@ -133,14 +160,14 @@ Pick the smallest variant that fits. `development` is intended only when priorit
 | Flag | Behavior |
 | --- | --- |
 | `--apply-safe-fixes` | Low-risk fixes, e.g. add missing empty sections |
-| `--migrate-schema` | Migrate legacy single-date columns to Found / Done |
+| `--migrate-schema` | Migrate a supported 6/8-col single-date header to Found / Done (review first; see caveat below) |
 | `--fix-only` | Output modifier — print only a repair summary; pair with `--apply-safe-fixes` or `--migrate-schema` |
 
 It will not rename sections, move records, or rewrite duplicate IDs without your approval — those are semantic changes and appear as report recommendations.
 
-Every report also includes a **maintenance-rule status** section that detects whether the project has the session-end sync rule (`CLAUDE.md` / `AGENTS.md`) and the optional `Stop` hook installed. The CLI detects only; the agent asks before installing anything.
+Every report also includes a **maintenance-rule status** section that detects whether the project has the session-end sync rule (`CLAUDE.md` / `AGENTS.md`) and the optional `Stop` hook installed. Prefer `install-maintenance` (opt-in; add `--with-hook` for the Stop-hook guarantee) when the user wants it installed — do not install without consent.
 
-A project may legitimately keep the **single-date schema** (`Done Date` / 6-col). `check`/`standardize` auto-detect the schema and validate against it (override with `--schema single|dual`), and the report notes that `--migrate-schema` can upgrade it to dual-date. When duplicate IDs are detected, the report recommends adding `ADJ-` records to document the old→new ID mapping rather than silently renumbering. When `--migrate-schema` hits a data row whose cell count doesn't match the header (almost always an unescaped literal `|` in a cell), it leaves the row untouched and surfaces a `migrate_warnings` list in `--fix-only` and `--format json` output instead of silently undercounting.
+A project may legitimately keep the **supported single-date schema** (`Done Date` / `完成日期`, 6-col; or 8-col development). `check`/`standardize` auto-detect and validate that shape (override with `--schema single|dual`). Other historical single-date labels (`Found Date` / `发现日期`, `Start Date`, `Plan Date`) are **not** treated as that compatible schema by `check`/`add` today. The report may still note that `--migrate-schema` can upgrade a supported 6/8-col header — including a `Found Date` alias on the migrate path — but **review before applying**: current migration pads day-only values with `00:00` and may copy one date into both Found and Done on completed rows. When duplicate IDs are detected, the report recommends adding `ADJ-` records to document the old→new ID mapping rather than silently renumbering. When `--migrate-schema` hits a data row whose cell count doesn't match the header (almost always an unescaped literal `|` in a cell), it leaves the row untouched and surfaces a `migrate_warnings` list in `--fix-only` and `--format json` output instead of silently undercounting.
 
 ### Testing
 
@@ -148,22 +175,26 @@ A project may legitimately keep the **single-date schema** (`Done Date` / 6-col)
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-50 tests, all passing.
+98 tests, all passing.
 
 ### Project Structure
 
 ```
 skills-task-list-initialization/
+├── VERSION                                   # V0.3.0-Build0211-20260804
 ├── skills/task-list-initialization/
 │   ├── SKILL.md                              # Skill definition
+│   ├── evals/
+│   │   └── evals.json                        # Skill-creator eval cases
 │   ├── references/
-│   │   ├── task-list-standard.md             # Standard distilled from 4 projects
+│   │   ├── task-list-standard.md             # Recommended field/schema standard
 │   │   ├── task-list-template.md             # Canonical templates
 │   │   └── maintenance-rule.md               # Session-end sync rule + Stop hook template
 │   └── scripts/
-│       └── task_list_cli.py                  # Python CLI
+│       ├── task_list_cli.py                  # CLI entry (re-exports)
+│       └── _tasklist/                        # Implementation package (_lib.py, _locale.py)
 ├── tests/
-│   └── test_task_list_cli.py                 # Unit tests
+│   └── test_task_list_cli.py                 # Unit tests (98)
 ├── LICENSE                                   # MIT
 └── README.md
 ```
@@ -171,6 +202,16 @@ skills-task-list-initialization/
 ### License
 
 [MIT](LICENSE) © 2026 fenix-wangminle.
+
+### Changelog
+
+#### V0.3.0-Build0211-20260804
+
+- CLI package split (`scripts/_tasklist/`); commands: `update`, `list`, `sections`, `install-maintenance`, `archive`, …
+- Safer writes: post-write `check` + rollback; summary sync; explicit ID format/prefix checks; no ID reuse after archive
+- Safer migrate/install: refuse unknown/reordered headers; refuse bad/malformed `settings.json` shapes; locale detection ignores notes substrings
+- Docs note known limits: single-date `check`/`add` compatibility is `Done Date`/`完成日期` only; migrate pads `00:00` / may copy dates on completed rows; summary counts by section
+- Docs/evals aligned (`evals/evals.json`, `$SKILL_DIR` paths); **98** unit tests
 
 ---
 
@@ -186,13 +227,17 @@ skills-task-list-initialization/
 
 - **一套标准、四种模板**——`minimal`、`planning`、`extended`、`development`。
 - **中英双语**——中文（简体，默认）与英文 task-list；`init --lang` 选择语言，其余命令按文件自动检测。
-- **命令行工具**——通过 `task_list_cli.py` 完成生成、追加、校验、统计与标准化。
+- **命令行工具**——通过 `task_list_cli.py` 完成生成、追加、更新、校验、统计与标准化。
 - **先诊断后修复**——默认只生成报告，必须显式开启参数才会改写文件。
-- **安全 add / 严格 check**——`check` 检出非法 ID（如 `bug-001`、`BUG-12`）和非法时间戳，不再静默跳过；`add` 遇到表头不符合标准 schema 的分区（如错位的 `ID / 状态 / 动作 / …`）会拒绝写入，避免按列数猜测而把数据填进错误列。显式 `--id` 指定已存在的 ID 时也会拒绝写入，而非静默制造重复。
-- **schema 变体**——`check`/`standardize` 自动识别双日期与合法的单日期 schema（`--schema auto|dual|single`），单日期的好文件能通过校验，而非每个分区都报「表头不一致」。`add` 也会按分区 schema 追加对应列数的行。
-- **结构迁移**——把旧的单日期列迁移到「发现时间 / 完成时间」。
-- **维护规则检测**——`standardize` 检查项目是否已安装会话结束同步规则与 Stop hook，并在报告中标注，由 agent 询问用户后按需安装。
-- **经过测试**——50 个单元测试，覆盖 init、add、check、summary、standardize、分区别名、反向别名、标题空白容错、`--fix-only` 语义、维护规则检测、schema 变体检测、时间戳校验、非法 ID 检测、非标准表头拒绝、分区别名大小写不敏感与英文 locale。
+- **安全 add / update / 严格 check**——`add`/`update` 写后自动校验（失败回滚）；`--notes-file` / `--from-json` 避开 shell 转义；`update --id` 就地改状态/备注/时间。`check` 检出非法 ID 与非法时间戳；`add` 拒绝非标准表头而非猜测列布局。
+- **schema 变体**——`check`/`standardize` 自动识别双日期与受支持的单日期 schema（`--schema auto|dual|single`）。受支持的单日期形态是 **`完成日期` / `Done Date`**（6 列，或 8 列开发扩展）。历史标签如 `发现日期`、`开始日期`、`规划日期` **目前**不被 `check`/`add` 接受（已知缺口，后续版本修复）。`add` 按分区已识别的 schema 追加对应列数。
+- **结构迁移**——`--migrate-schema` 将受支持的 6/8 列单日期表头（含仅在 migrate 路径上的 `发现日期` 别名）升到「发现时间 / 完成时间」。**注意：** 当前实现会把仅精确到日的值补成 `00:00`，且完成态行可能把同一日期同时写入发现时间与完成时间——重要历史台账请先看报告 / dry-run，勿直接 `--migrate-schema`。
+- **维护规则检测**——`standardize` 检查会话结束同步规则与 Stop hook，并做**声明 vs 实际**一致性校验（文档声称由 hook 保证触发但实际未装 → 标红）。
+- **通用待办状态**——`待办` / `Todo` 覆盖非 Bug 类未完成；非标准状态附带建议映射。
+- **自动转义 `|`**——`--apply-safe-fixes` 可合并并转义导致列数错乱的未转义 `|`。
+- **条目互引**——`[[BUG-001]]` 语法，`check` 检测悬空引用。
+- **归档**——`archive --older-than-days N` 将旧的已完成记录移到 `task-list-archive-YYYYMM.md`。
+- **经过测试**——98 个单元测试，覆盖 init、add、update、list、sections、from-json、notes-file、写后校验回滚、check、summary、standardize、archive、install-maintenance、分区别名与反向别名、标题空白容错、`--fix-only` 语义、维护规则声明一致性与跨文件幂等、schema 变体检测、时间戳校验、非法 ID 检出、非标准表头拒绝、归档后 ID 不复用、管道符转义、互引检测、状态建议映射、分区大小写不敏感解析与英文 locale。
 
 ### 任务清单标准
 
@@ -234,50 +279,70 @@ skills-task-list-initialization/
 
 #### 状态
 
-`待修复` · `已修复` · `待开发` · `进行中` · `已完成` · `已解决` · `已关闭`
+`待修复` · `已修复` · `待办` · `待开发` · `进行中` · `已完成` · `已解决` · `已关闭`
 
-Bug 完成态用 `已修复`，非 Bug 完成态用 `已完成`。四个终态（`已修复` / `已完成` / `已解决` / `已关闭`）均按完成态统计。
+Bug 完成态用 `已修复`，非 Bug 完成态用 `已完成`。通用未完成优先用 `待办`（文档/运维/检查/调整等）。四个终态（`已修复` / `已完成` / `已解决` / `已关闭`）均按完成态统计。
 
 ### 命令行工具
 
-`task_list_cli.py` 是单文件、**仅依赖标准库**的 Python 3.8+ 工具。Windows 上请把 `python3` 替换为 `python`。
+`task_list_cli.py` 是 **仅依赖标准库** 的 Python 3.8+ CLI（实现位于 `scripts/_tasklist/`）。Windows 上请把 `python3` 替换为 `python`。
 
 | 命令 | 用途 |
 | --- | --- |
 | `init` | 生成模板 |
-| `add` | 向分区追加一条记录 |
+| `add` | 追加一条或多条（`--from-json` / `--notes-file`；写后自动校验） |
+| `update` | 按 `--id` 更新已有记录（状态、备注追加、时间等） |
+| `list` | 按 `--id` / `--status` / `--section` / `--keyword` 筛选记录 |
+| `sections` | 列出分区（`--format json`） |
 | `check` | 校验 ID 格式、结构、枚举与时间戳 |
-| `summary` | 统计记录；`--write` 回写统计摘要 |
+| `summary` | 按物理分区统计；`--write` 回写统计摘要（见下方口径说明） |
 | `standardize` | 诊断并可选修复 |
+| `archive` | 将旧已完成记录移到归档文件 |
+| `install-maintenance` | 安装会话结束同步规则（可选；`--with-hook` 装 Stop hook） |
 
 ```bash
+SKILL_CLI=skills/task-list-initialization/scripts/task_list_cli.py
+# 安装到 ~/.claude/skills/ 后：SKILL_CLI=$SKILL_DIR/scripts/task_list_cli.py
+
 # 生成任务清单（默认中文简体）
-python3 skills/task-list-initialization/scripts/task_list_cli.py init --output task-list.md
+python3 "$SKILL_CLI" init --output task-list.md
 
 # 英文模板，extended 并附统计摘要
-python3 skills/task-list-initialization/scripts/task_list_cli.py init \
+python3 "$SKILL_CLI" init \
   --lang en --profile extended --with-summary --output task-list.md
 
 # 追加一条记录（语言按文件自动检测）
-python3 skills/task-list-initialization/scripts/task_list_cli.py add \
+python3 "$SKILL_CLI" add \
   --file task-list.md --section "代码 Bug" --action 修复 \
   --description "登录失败" --status 待修复 --notes "本地可复现"
 
-# 校验
-python3 skills/task-list-initialization/scripts/task_list_cli.py check --file task-list.md
+# 批量追加 / 长备注（避开 shell 转义）
+python3 "$SKILL_CLI" add --file task-list.md --from-json entries.json
+python3 "$SKILL_CLI" add --file task-list.md --section "代码 Bug" --action 修复 \
+  --description "x" --status 待修复 --notes-file notes.txt
+
+# 更新状态 / 追加备注
+python3 "$SKILL_CLI" update --file task-list.md --id BUG-001 \
+  --status 已修复 --completed-time "2026-08-04 16:00" --notes-append "已验证"
+
+# 筛选 / 安装维护规则 / 校验
+python3 "$SKILL_CLI" list --file task-list.md --status 待修复
+python3 "$SKILL_CLI" sections --file task-list.md --format json
+python3 "$SKILL_CLI" install-maintenance --file task-list.md
+python3 "$SKILL_CLI" check --file task-list.md
 
 # 按单日期（旧）schema 校验
-python3 skills/task-list-initialization/scripts/task_list_cli.py check --file task-list.md --schema single
+python3 "$SKILL_CLI" check --file task-list.md --schema single
 
-# 重算并回写统计摘要
-python3 skills/task-list-initialization/scripts/task_list_cli.py summary --file task-list.md --write
+# 重算并回写统计摘要（按物理分区计数）
+python3 "$SKILL_CLI" summary --file task-list.md --write
 
 # 诊断已有清单（只出报告，不改文件）
-python3 skills/task-list-initialization/scripts/task_list_cli.py standardize \
-  --file task-list.md --report docs/task-list-standardize-report.md
+python3 "$SKILL_CLI" standardize \
+  --file task-list.md --report task-list-standardize-report.md
 ```
 
-`init --lang {zh,en}` 选择语言（`zh` 中文简体，默认；`en` 英文）。`add`/`check`/`summary`/`standardize` 按目标文件自动检测语言，无需传 `--lang`。`check`/`standardize` 支持 `--schema {auto,dual,single}`（默认 `auto`），对刻意保留旧单日期 schema 的文件按此校验。`add` 会按目标分区 schema 自动输出对应列数。`check` 检出非法 ID（`bug-001`）与非法时间戳；`add` 遇到表头不符合标准 schema 的分区（如列顺序错位）会拒绝写入而非猜测——请先运行 `standardize --migrate-schema` 或手工修正表头。运行各子命令的 `--help` 查看完整参数。
+`init --lang {zh,en}` 选择语言（`zh` 中文简体，默认；`en` 英文）。`add`/`update`/`check`/`summary`/`standardize` 按目标文件自动检测语言，无需传 `--lang`。`add`/`update` 写后默认自动 `check`（失败回滚；`--no-check` 可跳过）。`check`/`standardize` 支持 `--schema {auto,dual,single}`（默认 `auto`），对刻意保留受支持单日期 schema（`完成日期` / `Done Date`）的文件按此校验。`add` 会按目标分区已识别的 schema 自动输出对应列数。`check` 检出非法 ID（`bug-001`）与非法时间戳；`add` 遇到表头不符合已识别 schema 的分区（如列顺序错位，或历史 `发现日期` 表头）会拒绝写入而非猜测——请手工修正表头，或仅在审阅报告后对受支持的 6/8 列单日期旧 schema 使用 `--migrate-schema`。`summary --write` 按**物理章节**汇总，不是按 ID 前缀；若历史文件原先按前缀统计且存在错放记录，回写前请先核对。运行各子命令的 `--help` 查看完整参数。
 
 ### 模板类型
 
@@ -297,14 +362,14 @@ python3 skills/task-list-initialization/scripts/task_list_cli.py standardize \
 | 参数 | 行为 |
 | --- | --- |
 | `--apply-safe-fixes` | 低风险修复，如补齐缺失空分区 |
-| `--migrate-schema` | 迁移旧单日期列为「发现时间 / 完成时间」 |
+| `--migrate-schema` | 将受支持的 6/8 列单日期表头迁移为「发现时间 / 完成时间」（先审阅；见下方注意） |
 | `--fix-only` | 输出修饰：仅打印修复摘要；需配合 `--apply-safe-fixes` 或 `--migrate-schema` |
 
 未经你同意，它不会重命名章节、移动记录或重写重复 ID——这些属于语义变更，只会作为报告建议出现。
 
-每份报告还包含**维护规则状态**分区，检测项目是否已安装会话结束同步规则（`CLAUDE.md` / `AGENTS.md`）与可选 `Stop` hook。CLI 只负责检测，是否安装由 agent 询问用户后再决定。
+每份报告还包含**维护规则状态**分区，检测项目是否已安装会话结束同步规则（`CLAUDE.md` / `AGENTS.md`）与可选 `Stop` hook。用户同意后优先用 `install-maintenance` 安装（可选 `--with-hook`）；未经同意不要安装。
 
-项目可以合法保留**单日期 schema**（`完成日期` / 6 列）。`check`/`standardize` 自动识别并按此校验（可用 `--schema single|dual` 覆盖），报告中提示可用 `--migrate-schema` 升级为双日期。检测到重复 ID 时，报告会建议新增 `ADJ-` 记录说明旧号→新号映射，而非静默重编号。`--migrate-schema` 遇到列数与表头不符的数据行（几乎总是单元格里未转义的 `|`）时，会保留原行并在 `--fix-only` / `--format json` 输出中以 `migrate_warnings` 列出，不再静默漏报。
+项目可以合法保留**受支持的单日期 schema**（`完成日期` / `Done Date`，6 列；或 8 列开发扩展）。`check`/`standardize` 自动识别并按此校验（可用 `--schema single|dual` 覆盖）。其他历史单日期标签（`发现日期`、`开始日期`、`规划日期`）**目前**不被 `check`/`add` 当作该兼容 schema。报告仍可能提示可用 `--migrate-schema` 升级受支持的 6/8 列表头（migrate 路径另接受 `发现日期` 别名），但**写入前务必审阅**：当前迁移会把日精度值补成 `00:00`，且完成态行可能把同一日期同时写入发现时间与完成时间。检测到重复 ID 时，报告会建议新增 `ADJ-` 记录说明旧号→新号映射，而非静默重编号。`--migrate-schema` 遇到列数与表头不符的数据行（几乎总是单元格里未转义的 `|`）时，会保留原行并在 `--fix-only` / `--format json` 输出中以 `migrate_warnings` 列出，不再静默漏报。
 
 ### 测试
 
@@ -312,22 +377,26 @@ python3 skills/task-list-initialization/scripts/task_list_cli.py standardize \
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-50 个测试，全部通过。
+98 个测试，全部通过。
 
 ### 项目结构
 
 ```
 skills-task-list-initialization/
+├── VERSION                                   # V0.3.0-Build0211-20260804
 ├── skills/task-list-initialization/
 │   ├── SKILL.md                              # 技能定义
+│   ├── evals/
+│   │   └── evals.json                        # Skill-creator 评测用例
 │   ├── references/
-│   │   ├── task-list-standard.md             # 四项目归纳标准
+│   │   ├── task-list-standard.md             # 推荐字段 / schema 标准
 │   │   ├── task-list-template.md             # 标准模板
 │   │   └── maintenance-rule.md               # 会话末同步规则 + Stop hook 模板
 │   └── scripts/
-│       └── task_list_cli.py                  # 命令行工具
+│       ├── task_list_cli.py                  # CLI 入口（再导出）
+│       └── _tasklist/                        # 实现包（_lib.py、_locale.py）
 ├── tests/
-│   └── test_task_list_cli.py                 # 单元测试
+│   └── test_task_list_cli.py                 # 单元测试（98）
 ├── LICENSE                                   # MIT
 └── README.md
 ```
@@ -335,3 +404,13 @@ skills-task-list-initialization/
 ### 许可证
 
 [MIT](LICENSE) © 2026 fenix-wangminle。
+
+### 更新日志
+
+#### V0.3.0-Build0211-20260804
+
+- CLI 拆分为 `scripts/_tasklist/`；新增/完善 `update`、`list`、`sections`、`install-maintenance`、`archive` 等
+- 写路径更安全：写后 `check` 回滚、摘要同步、显式 ID 格式/前缀校验、归档后不复用 ID
+- migrate/install 更安全：拒未知/重排表头、拒畸形 settings、语言检测忽略备注子串
+- 文档标明已知边界：单日期 `check`/`add` 兼容仅限 `完成日期`/`Done Date`；migrate 会补 `00:00` / 完成态可能复制日期；summary 按物理分区计数
+- 文档与 evals 对齐；**98** 个单元测试

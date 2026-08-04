@@ -1,0 +1,89 @@
+{
+  "skill_name": "task-list-initialization",
+  "evals": [
+    {
+      "id": 1,
+      "name": "init-chinese-minimal",
+      "prompt": "我刚接手一个 React 后台项目，目录里还没有任何任务台账。帮我建一个 task-list.md 放在项目根目录，用最通用的 7 分区 7 列模板，中文。",
+      "expected_output": "项目根目录生成一份中文 task-list.md，含 7 个标准分区（代码 Bug / 调整事项 / 检查事项 / 测试数据 / 文档维护 / 功能开发 / 配置运维），每个分区是空的 7 列 Markdown 表格（ID / 动作 / 问题描述或事项 / 发现时间 / 完成时间 / 状态 / 备注），文件顶部含字段说明引用块。优先用 $SKILL_DIR/scripts/task_list_cli.py init 生成。",
+      "files": [],
+      "expectations": [
+        "在项目根目录创建了一个名为 task-list.md 的文件",
+        "task-list.md 包含全部 7 个中文标准分区标题：代码 Bug、调整事项、检查事项、测试数据、文档维护、功能开发、配置运维",
+        "每个分区的表头是 7 列：ID / 动作 / 问题描述或事项 / 发现时间 / 完成时间 / 状态 / 备注",
+        "文件顶部包含字段说明引用块，且 8 个动作枚举（修复、开发、优化、调整、规划、检查、文档、运维）都被列出",
+        "使用了 $SKILL_DIR/scripts/task_list_cli.py init --lang zh（或等价 CLI）生成，而非手写表格"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "add-and-check-bug-record",
+      "prompt": "我们项目根的 task-list.md 已经存在了。现在发现一个 bug：用户在登录页输入正确密码但点了登录后页面无响应，控制台报 401。把它记进 task-list.md，然后跑一次校验确认没问题。",
+      "expected_output": "使用 $SKILL_DIR/scripts/task_list_cli.py add 向「代码 Bug」分区追加一行 BUG-001，动作=修复，状态=待修复，发现时间为本机当前时间，完成时间为 -；add 写后默认自动 check（或显式再跑 check），报告应为通过/无错误。",
+      "files": [],
+      "expectations": [
+        "在「代码 Bug」分区新增了一条记录，ID 形如 BUG-001",
+        "新增记录的动作字段 = 修复，状态 = 待修复",
+        "新增记录的完成时间列填写为 - （因未完成）",
+        "通过 add 写后自动校验或显式运行 check 完成校验",
+        "check 输出未报告该新增条目相关的错误（无 ID 重复、无时间格式错误、无状态枚举错误）"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "standardize-legacy-single-date",
+      "prompt": "我们这份 task-list.md 是半年前的，表头是老的 6 列（ID/动作/事项/完成日期/状态/备注），只有「完成日期」一列时间，跟你现在写的 dual-date 模板对不上。先帮我做一次诊断，只出报告别改文件。之后我会自己决定是否迁移。",
+      "expected_output": "运行 $SKILL_DIR/scripts/task_list_cli.py standardize --file task-list.md 生成一份诊断报告，默认 report-only 不修改 task-list.md；报告应识别出当前为 single-date schema、提示可通过 --migrate-schema 升级、并指出其他结构问题；不应擅自重命名分区、移动记录或重写 ID。",
+      "files": [],
+      "expectations": [
+        "运行了 $SKILL_DIR/scripts/task_list_cli.py standardize 子命令（而非 check 或 add）",
+        "未对 task-list.md 做任何写入修改（report-only）",
+        "生成的报告明确指出当前文件使用 single-date 旧 schema，并提及可用 --migrate-schema 升级",
+        "报告未建议或擅自动作如重命名分区、移动记录、重写重复 ID（这类语义改动留待用户批准）",
+        "报告包含「维护规则状态」相关检测（会话结束任务同步规则 / Stop hook 是否已安装）"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "update-status-and-notes",
+      "prompt": "task-list.md 里已有 BUG-001，状态还是「进行中」。代码已经修好了，请用 CLI 把它改成已修复，完成时间填今天本地时间，并在备注里追加「本地回归通过」。不要手改 Markdown。",
+      "expected_output": "使用 $SKILL_DIR/scripts/task_list_cli.py update --id BUG-001 --status 已修复 --completed-time … --notes-append …；写后自动 check 通过；行内状态与完成时间已更新，备注含追加内容。",
+      "files": [],
+      "expectations": [
+        "使用了 update 子命令（而非手改 Markdown 表格）",
+        "BUG-001 的状态变为 已修复",
+        "BUG-001 的完成时间不再是 -",
+        "BUG-001 备注中包含追加的验证说明（如「本地回归通过」）",
+        "写后 check 通过或等价结构校验成功"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "add-syncs-summary",
+      "prompt": "这份 task-list.md 末尾已经有「统计摘要」表，但数字还是全 0。请往「代码 Bug」追加一条已修复记录，并确保摘要表数字跟着更新，不要让我再手动跑 summary --write。",
+      "expected_output": "使用 add 追加 BUG 记录；因文件已有统计摘要章节，add 默认自动重算摘要；摘要中代码 Bug 总数≥1且总计同步；check 不报告摘要漂移。",
+      "files": [],
+      "expectations": [
+        "使用 CLI add 追加了至少一条代码 Bug 记录",
+        "统计摘要表中「代码 Bug」的总数大于 0（不再全是 0）",
+        "统计摘要「总计」行与各分区合计一致",
+        "未要求用户再手动执行 summary --write（由 add 默认同步完成）",
+        "check 未报告摘要表过期/漂移"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "install-maintenance-rule",
+      "prompt": "我想让以后每个 agent 会话结束时都记得同步 task-list。请按技能规范把维护规则装进项目，先只要策略规则，先别装 Stop hook。装之前先问我确认——我确认：可以装。",
+      "expected_output": "在用户确认后运行 install-maintenance（不加 --with-hook），把「会话结束任务同步」规则写入 CLAUDE.md 或 AGENTS.md；幂等；不创建 Stop hook。",
+      "files": [],
+      "expectations": [
+        "使用了 install-maintenance 子命令（或等价按 maintenance-rule.md 安装）",
+        "未传入 --with-hook（或未安装 Stop hook）",
+        "CLAUDE.md 或 AGENTS.md 中出现「会话结束任务同步」标记标题",
+        "未在未确认时擅自安装",
+        "安装后可用 standardize 的维护规则状态检测为已安装规则"
+      ]
+    }
+  ]
+}

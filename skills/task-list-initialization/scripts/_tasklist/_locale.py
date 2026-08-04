@@ -1,0 +1,486 @@
+from __future__ import annotations
+
+import argparse
+import difflib
+import json
+import re
+import sys
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from pathlib import Path
+
+@dataclass(frozen=True)
+class Section:
+    title: str
+    prefix: str | None
+    columns: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Locale:
+    name: str
+    title: str
+    intro: str
+    notes: tuple[str, ...]
+    base_sections: tuple[Section, ...]
+    planning: Section
+    opt: Section
+    res: Section
+    dev_extended: Section
+    actions: frozenset[str]
+    statuses: frozenset[str]
+    completed_statuses: frozenset[str]
+    pending_statuses: frozenset[str]
+    section_aliases: dict[str, str]
+    summary_columns: tuple[str, ...]
+    summary_section: str
+    total_label: str
+    action_optimize: str
+
+    def all_sections(self) -> tuple[Section, ...]:
+        return (*self.base_sections, self.planning, self.opt, self.res, self.dev_extended)
+
+    def features_section(self) -> Section:
+        # The base DEV-prefixed section (功能开发 / Features) that the development profile
+        # replaces with the 9-column dev_extended table.
+        return next(section for section in self.base_sections if section.prefix == "DEV")
+
+
+_ZH = Locale(
+    name="zh",
+    title="# 任务跟踪列表",
+    intro=(
+        "记录本项目所有任务：代码 bug、bug 转需求、新增需求、需求调整、功能开发、"
+        "代码审查、测试数据、文档维护、配置运维等。"
+    ),
+    notes=(
+        "> 说明：本文件是当前项目的任务清单。所有新增事项、状态变更和完成记录都应同步写入本文件。",
+        "> 字段说明：动作字段只允许以下 8 个固定枚举：修复、开发、优化、调整、规划、检查、文档、运维。",
+        "> 时间说明：发现时间和完成时间分开记录，格式为 YYYY-MM-DD HH:MM，使用机器本地时区的 24 小时制时间；未完成事项的完成时间填 -。",
+        "> 状态说明：Bug 未完成用待修复，通用未完成用待办（或待开发），进行中/已完成/已修复/已关闭/已解决按语义选用；条目互引用 [[BUG-001]] 语法。",
+        "> 归并规则：审计、复核、核查、审查、验证、评估统一记为“检查”；重构、清理统一记为“优化”；方案、梳理统一记为“规划”；记录类文档事项统一记为“文档”。",
+    ),
+    base_sections=(
+        Section("代码 Bug", "BUG", ("ID", "动作", "问题描述", "发现时间", "完成时间", "状态", "备注")),
+        Section("调整事项", "ADJ", ("ID", "动作", "事项", "发现时间", "完成时间", "状态", "备注")),
+        Section("检查事项", "CHK", ("ID", "动作", "事项", "发现时间", "完成时间", "状态", "备注")),
+        Section("测试数据", "TST", ("ID", "动作", "事项", "发现时间", "完成时间", "状态", "备注")),
+        Section("文档维护", "DOC", ("ID", "动作", "事项", "发现时间", "完成时间", "状态", "备注")),
+        Section("功能开发", "DEV", ("ID", "动作", "事项", "发现时间", "完成时间", "状态", "备注")),
+        Section("配置运维", "OPS", ("ID", "动作", "事项", "发现时间", "完成时间", "状态", "备注")),
+    ),
+    planning=Section("规划事项", "PLN", ("ID", "动作", "事项", "发现时间", "完成时间", "状态", "备注")),
+    opt=Section("优化事项", "OPT", ("ID", "动作", "事项", "发现时间", "完成时间", "状态", "备注")),
+    res=Section("调研事项", "RES", ("ID", "动作", "事项", "发现时间", "完成时间", "状态", "备注")),
+    dev_extended=Section(
+        "开发事项", "DEV", ("ID", "动作", "事项", "优先级", "预计时间", "发现时间", "完成时间", "状态", "备注")
+    ),
+    actions=frozenset({"修复", "开发", "优化", "调整", "规划", "检查", "文档", "运维"}),
+    statuses=frozenset({"待修复", "已修复", "待办", "待开发", "进行中", "已完成", "已关闭", "已解决", "-"}),
+    completed_statuses=frozenset({"已修复", "已完成", "已关闭", "已解决"}),
+    pending_statuses=frozenset({"待修复", "待办", "待开发", "进行中"}),
+    section_aliases={
+        "代码Bug": "代码 Bug",
+        "bug": "代码 Bug",
+        "BUG": "代码 Bug",
+        "开发": "功能开发",
+        "功能": "功能开发",
+        "功能开发": "功能开发",
+        "开发事项": "开发事项",
+        "DEV": "功能开发",
+        "文档": "文档维护",
+        "文档事项": "文档维护",
+        "文档维护": "文档维护",
+        "DOC": "文档维护",
+        "运维": "配置运维",
+        "配置": "配置运维",
+        "配置运维": "配置运维",
+        "OPS": "配置运维",
+        "调整": "调整事项",
+        "调整事项": "调整事项",
+        "ADJ": "调整事项",
+        "检查": "检查事项",
+        "检查事项": "检查事项",
+        "CHK": "检查事项",
+        "测试": "测试数据",
+        "测试数据": "测试数据",
+        "TST": "测试数据",
+        "规划": "规划事项",
+        "规划事项": "规划事项",
+        "PLN": "规划事项",
+        "调研": "调研事项",
+        "调研事项": "调研事项",
+        "RES": "调研事项",
+        "开源项目调研": "调研事项",
+        "优化": "优化事项",
+        "优化事项": "优化事项",
+        "OPT": "优化事项",
+    },
+    summary_columns=("分类", "总数", "已完成", "待开发/待修复", "完成率"),
+    summary_section="统计摘要",
+    total_label="总计",
+    action_optimize="优化",
+)
+
+
+_EN = Locale(
+    name="en",
+    title="# Task Tracking List",
+    intro=(
+        "Records all project tasks: bugs, bug-to-requirement conversions, new requirements, "
+        "requirement adjustments, feature development, code reviews, test data, documentation, "
+        "operations, etc."
+    ),
+    notes=(
+        "> Note: This file is the project's task list. All new items, status changes, and completion records should be synced into this file.",
+        "> Fields: The Action field allows only these 8 fixed values: Fix, Develop, Optimize, Adjust, Plan, Review, Doc, Ops.",
+        "> Time: Found and Done are recorded separately in YYYY-MM-DD HH:MM format, using the machine's local timezone in 24-hour time; for incomplete items, Done is -.",
+        "> Status: Use Pending Fix for open bugs, Todo (or Pending Dev) for other open work, plus In Progress / Done / Fixed / Closed / Resolved. Cross-link items with [[BUG-001]].",
+        "> Merging: Audit/Recheck/Verify/Review/Validate/Assess are unified as \"Review\"; Refactor/Cleanup as \"Optimize\"; Proposal/Outline as \"Plan\"; record-style documentation items as \"Doc\".",
+    ),
+    base_sections=(
+        Section("Bugs", "BUG", ("ID", "Action", "Description", "Found", "Done", "Status", "Notes")),
+        Section("Adjustments", "ADJ", ("ID", "Action", "Item", "Found", "Done", "Status", "Notes")),
+        Section("Reviews", "CHK", ("ID", "Action", "Item", "Found", "Done", "Status", "Notes")),
+        Section("Test Data", "TST", ("ID", "Action", "Item", "Found", "Done", "Status", "Notes")),
+        Section("Docs", "DOC", ("ID", "Action", "Item", "Found", "Done", "Status", "Notes")),
+        Section("Features", "DEV", ("ID", "Action", "Item", "Found", "Done", "Status", "Notes")),
+        Section("Ops", "OPS", ("ID", "Action", "Item", "Found", "Done", "Status", "Notes")),
+    ),
+    planning=Section("Plans", "PLN", ("ID", "Action", "Item", "Found", "Done", "Status", "Notes")),
+    opt=Section("Optimizations", "OPT", ("ID", "Action", "Item", "Found", "Done", "Status", "Notes")),
+    res=Section("Research", "RES", ("ID", "Action", "Item", "Found", "Done", "Status", "Notes")),
+    dev_extended=Section(
+        "Development", "DEV", ("ID", "Action", "Item", "Priority", "Estimate", "Found", "Done", "Status", "Notes")
+    ),
+    actions=frozenset({"Fix", "Develop", "Optimize", "Adjust", "Plan", "Review", "Doc", "Ops"}),
+    statuses=frozenset({"Pending Fix", "Fixed", "Todo", "Pending Dev", "In Progress", "Done", "Closed", "Resolved", "-"}),
+    completed_statuses=frozenset({"Fixed", "Done", "Closed", "Resolved"}),
+    pending_statuses=frozenset({"Pending Fix", "Todo", "Pending Dev", "In Progress"}),
+    section_aliases={
+        "bug": "Bugs",
+        "Bug": "Bugs",
+        "BUG": "Bugs",
+        "Bugs": "Bugs",
+        "dev": "Features",
+        "DEV": "Features",
+        "feature": "Features",
+        "features": "Features",
+        "Features": "Features",
+        "Development": "Development",
+        "development": "Development",
+        "doc": "Docs",
+        "docs": "Docs",
+        "DOC": "Docs",
+        "Docs": "Docs",
+        "ops": "Ops",
+        "OPS": "Ops",
+        "Ops": "Ops",
+        "adjustment": "Adjustments",
+        "adjustments": "Adjustments",
+        "ADJ": "Adjustments",
+        "Adjustments": "Adjustments",
+        "review": "Reviews",
+        "reviews": "Reviews",
+        "CHK": "Reviews",
+        "Reviews": "Reviews",
+        "test": "Test Data",
+        "TST": "Test Data",
+        "Test Data": "Test Data",
+        "plan": "Plans",
+        "plans": "Plans",
+        "PLN": "Plans",
+        "Plans": "Plans",
+        "optimization": "Optimizations",
+        "optimizations": "Optimizations",
+        "OPT": "Optimizations",
+        "Optimizations": "Optimizations",
+        "research": "Research",
+        "RES": "Research",
+        "Research": "Research",
+    },
+    summary_columns=("Category", "Total", "Done", "Pending", "Rate"),
+    summary_section="Summary",
+    total_label="Total",
+    action_optimize="Optimize",
+)
+
+
+LOCALES = {"zh": _ZH, "en": _EN}
+
+
+# Date-model variants. The canonical schema is dual-date (发现时间 + 完成时间 / Found +
+# Done). A project may legitimately keep the legacy single-date schema (完成日期 / Done
+# Date — 6-col, or 8-col dev). check/standardize auto-detect which model a file uses and
+# validate against it, so a single-date file in good shape is NOT flagged as
+# 「表头与标准不一致」on every section. Migration to dual-date remains opt-in (--migrate-schema).
+DUAL_DATE_COLS = {"zh": ("发现时间", "完成时间"), "en": ("Found", "Done")}
+SINGLE_DATE_COL = {"zh": "完成日期", "en": "Done Date"}
+SINGLE_DATE_ALIASES = {
+    "zh": ("完成日期", "发现日期"),
+    "en": ("Done Date", "Found Date"),
+}
+
+
+# User-facing strings (CLI prompts, diagnostic report). Locale-driven so an English
+# task-list gets an English report.
+T = {
+    "zh": {
+        "report_title": "# task-list 标准化诊断报告",
+        "file": "文件",
+        "generated_at": "生成时间",
+        "current_profile": "当前 Profile",
+        "recommended_profile": "推荐 Profile",
+        "record_count": "记录总数",
+        "sec_structure": "## 结构问题",
+        "sec_classification": "## 分类清晰度",
+        "sec_completeness": "## 记录完整性",
+        "sec_recommendations": "## 扩展与优化建议",
+        "sec_autofix": "## 可自动修复项",
+        "sec_maintenance": "## 维护规则状态",
+        "sec_applied": "## 本次已执行修复",
+        "empty": "无",
+        "agent_file": "agent 文件",
+        "agent_file_none": "未发现 CLAUDE.md / AGENTS.md",
+        "rule_label": "会话结束同步规则",
+        "hook_label": "Stop hook 保证层",
+        "hook_optional": "未检测到（可选）",
+        "installed": "已安装",
+        "not_detected": "未检测到",
+        "rec_install_rule": "- 建议：standardize 完成后询问用户是否安装「会话结束任务同步」规则（opt-in），模板见 references/maintenance-rule.md。",
+        "rec_install_hook": "- 建议：规则已安装但未装 Stop hook；如需每次会话末强制触发可补装（可选）。",
+        "rec_claim_mismatch": "- ⚠️ 声明与实际不一致：agent 文件声称由 Stop hook / settings.json 保证触发，但未检测到有效 Stop hook。请补装 hook，或改写声明为「未配置 hook 时由 agent 自觉执行」。",
+        "claim_mismatch_label": "声明与实际不一致",
+        "dup_section": "重复章节：{0} 出现 {1} 次",
+        "header_mismatch": "表头与标准不一致：{0}",
+        "col_mismatch": "表格列数异常：第 {0} 行，期望 {1} 列，实际 {2} 列——多为单元格内未转义的 |，可用 --apply-safe-fixes 自动转义",
+        "bad_action_line": "动作不在枚举中：第 {0} 行 {1}",
+        "bad_status_line": "状态不在建议枚举中：第 {0} 行 {1}",
+        "bad_status_suggest": "状态不在建议枚举中：第 {0} 行 {1}（建议：{2}）",
+        "bad_time_line": "时间不合法：第 {0} 行 {1}",
+        "active_has_time_line": "第 {0} 行 {1}：状态「{2}」为未完成，但完成时间不是 -，请核对状态或将完成时间置为 -。",
+        "dangling_ref": "悬空引用：第 {0} 行 [[{1}]] 指向不存在的 ID",
+        "pipe_escape_fix": "转义未转义的 |：第 {0} 行 {1}",
+        "archive_moved": "已归档 {0} 条记录 → {1}",
+        "archive_none": "没有符合条件的已完成旧记录可归档",
+        "archive_as_of_bad": "--as-of 格式应为 YYYY-MM-DD：{0}",
+        "archive_output_same": "归档输出路径与主文件相同：{0}。为避免记录丢失已拒绝归档，请为 --output 指定一个不同的文件。",
+        "dup_id": "重复 ID：{0} 出现在行 {1}",
+        "bad_id_line": "第 {0} 行：ID 格式非法「{1}」，应为 大写前缀-三位数字（如 BUG-001）",
+        "bad_id_on_add": "ID 格式非法：「{0}」，应为 大写前缀-三位数字（如 BUG-001）。",
+        "prefix_mismatch_on_add": "ID {0} 与分区「{1}」期望的前缀 {2}- 不一致。",
+        "dup_id_on_add": "ID 已存在：{0}。--id 不能复用已占用的 ID；请去掉 --id 自动分配下一个，或指定一个未使用的 ID。",
+        "prefix_mismatch": "第 {0} 行：{1} 位于「{2}」，但该分区期望前缀 {3}-",
+        "warn_sparse_notes": "{0} 条记录备注为空或仅为 -，建议补充文件、测试、来源或后续风险。",
+        "warn_completed_no_time": "{0} 条已完成/已修复记录缺少完成时间。",
+        "warn_active_has_time": "{0} 条未完成记录已经填写完成时间，建议核对状态。",
+        "rec_profile_higher": "当前内容更接近 {0}，高于指定 profile {1}，建议人工确认是否升级。",
+        "rec_legacy_research": "发现「开源项目调研」分区，建议统一命名为「调研事项」并使用 RES- 前缀。",
+        "rec_legacy_doc": "发现「文档事项」分区，建议统一命名为「文档维护」。",
+        "rec_opt_without_section": "存在优化类记录但没有「优化事项」分区；若优化事项较多，建议使用 extended profile。",
+        "rec_res_without_section": "存在 RES- 记录但没有「调研事项」分区，建议补充分区或迁移记录。",
+        "rec_priority_without_dev": "发现优先级字段但未使用「开发事项」标准扩展分区，建议核对开发表结构。",
+        "rec_single_date_schema": "- 信息：本项目使用单日期 schema（合法变体），check 已按此校验；如需升级为双日期模型（发现时间/完成时间），可用 --migrate-schema（需批准）。",
+        "rec_dup_id_mapping": "- 建议：检测到重复 ID；如需清理，新增 ADJ- 记录说明改号映射（旧号→新号），避免历史引用断裂。",
+        "auto_fix_candidate": "可补齐缺失分区：{0}",
+        "auto_fix_pipe": "可转义未转义的 |：第 {0} 行 {1}",
+        "add_section_fix": "补齐缺失分区：{0}",
+        "migrate_header": "迁移「{0}」表头为 {1} 列新 schema",
+        "migrate_skip": "⚠️ {0}（第 {1} 行）：实际 {3} 列、legacy 表头 {2} 列，已跳过未迁移——多为单元格内未转义的 |，需人工处理",
+        "migrate_skips": "⚠️ {0} 行因列数与表头不符未迁移（多为单元格内未转义的 |，需人工处理）：",
+        "migrate_unknown_header": "无法迁移：分区「{0}」表头（{1} 列）既不是标准双日期 schema，也不是受支持的 6/8 列单日期旧 schema。未做任何修改，请手工核对列顺序后再迁移。",
+        "check_ok": "检查通过：未发现非法 ID、重复 ID、重复章节、列数异常、枚举问题、悬空引用或摘要漂移",
+        "section_not_found": "未找到分区：{0}",
+        "section_not_found_with_list": "未找到分区：{0}。当前文件可用分区：{1}",
+        "prefix_unknown": "无法推断分区 ID 前缀：{0}",
+        "bad_action": "动作不在枚举中：{0}（允许：修复、开发、优化、调整、规划、检查、文档、运维）",
+        "bad_status": "状态不在建议枚举中：{0}（允许：待修复、已修复、待办、待开发、进行中、已完成、已关闭、已解决）",
+        "bad_status_with_suggest": "状态不在建议枚举中：{0}（建议：{1}；允许：待修复、已修复、待办、待开发、进行中、已完成、已关闭、已解决）",
+        "summary_stale": "摘要表过期：{0} 摘要总数={1} 实际={2}",
+        "summary_stale_total": "摘要表过期：总计 摘要总数={0} 实际={1}",
+        "summary_synced": "已同步统计摘要",
+        "nonstandard_header": "分区「{0}」表头与标准 schema 不符（{1} 列），拒绝写入以免数据落入错误列。请手工核对列顺序后再 add；若确为受支持的 6/8 列单日期旧 schema，可运行 standardize --migrate-schema。",
+        "bad_time": "时间格式应为 YYYY-MM-DD HH:MM：{0}",
+        "bad_lang": "不支持的语言：{0}（可选：zh、en）",
+        "target_exists": "目标文件已存在，使用 --force 覆盖：{0}",
+        "generated_file": "已生成：{0}",
+        "added": "已追加：{0} -> {1}",
+        "updated": "已更新：{0}",
+        "field_not_applicable": "字段 {0} 不适用于分区「{1}」的记录（该表无此列），未做任何修改。",
+        "id_not_found": "未找到 ID：{0}",
+        "update_no_fields": "update 至少需要一个待改字段（如 --status / --notes / --notes-append / --completed-time）",
+        "notes_conflict": "不能同时使用 {0} 与 {1}",
+        "add_fields_required": "未使用 --from-json 时必须提供 --section / --action / --description / --status",
+        "from_json_bad": "--from-json 内容无效：{0}",
+        "from_json_entry_missing": "--from-json 第 {0} 条缺少字段：{1}",
+        "check_failed_rollback": "写入后校验失败，已回滚本次写入：",
+        "maint_installed_rule": "已安装会话结束同步规则 → {0}",
+        "maint_rule_present": "会话结束同步规则已安装（跳过）→ {0}",
+        "maint_installed_hook": "已安装 Stop hook → {0}",
+        "maint_hook_present": "Stop hook 已安装（跳过）",
+        "maint_hook_skipped": "未安装 Stop hook（未传 --with-hook）",
+        "settings_bad_json": "无法解析 {0}：JSON 无效（{1}）。已中止，未修改该文件；请先手工修复 JSON，或备份后移除该文件再重试。",
+        "settings_bad_shape": "无法安装 Stop hook：{0} 结构无效（{1}）。已中止，未写入 hook 脚本；请将 hooks.Stop 修正为数组后重试。",
+        "report_written": "已生成报告：{0}",
+        "fixes_applied": "修复完成：{0} 项",
+        "summary_updated": "已更新统计摘要：{0}",
+        "by_section": "按分区统计：",
+        "by_status": "按状态统计：",
+        "total_count": "总计：{0}",
+    },
+    "en": {
+        "report_title": "# task-list Standardization Report",
+        "file": "File",
+        "generated_at": "Generated",
+        "current_profile": "Current Profile",
+        "recommended_profile": "Recommended Profile",
+        "record_count": "Records",
+        "sec_structure": "## Structure",
+        "sec_classification": "## Classification",
+        "sec_completeness": "## Completeness",
+        "sec_recommendations": "## Recommendations",
+        "sec_autofix": "## Auto-fixable",
+        "sec_maintenance": "## Maintenance Rule",
+        "sec_applied": "## Applied Fixes",
+        "empty": "None",
+        "agent_file": "Agent file",
+        "agent_file_none": "No CLAUDE.md / AGENTS.md found",
+        "rule_label": "Session-end sync rule",
+        "hook_label": "Stop hook guarantee",
+        "hook_optional": "not detected (optional)",
+        "installed": "installed",
+        "not_detected": "not detected",
+        "rec_install_rule": "- Suggestion: after standardize, ask the user whether to install the session-end sync rule (opt-in); see references/maintenance-rule.md.",
+        "rec_install_hook": "- Suggestion: rule installed but no Stop hook; add one to force a reminder every session end (optional).",
+        "rec_claim_mismatch": "- ⚠️ Claim vs actual mismatch: agent file claims a Stop hook / settings.json guarantee, but no valid Stop hook was found. Install the hook, or reword the claim to say the agent runs the sync when no hook is configured.",
+        "claim_mismatch_label": "Claim vs actual mismatch",
+        "dup_section": "Duplicate section: {0} appears {1} times",
+        "header_mismatch": "Header does not match the standard: {0}",
+        "col_mismatch": "Column count mismatch: line {0}, expected {1}, found {2} — likely an unescaped | in a cell; --apply-safe-fixes can escape it",
+        "bad_action_line": "Action not in enum: line {0} {1}",
+        "bad_status_line": "Status not in suggested enum: line {0} {1}",
+        "bad_status_suggest": "Status not in suggested enum: line {0} {1} (suggest: {2})",
+        "bad_time_line": "Invalid time: line {0} {1}",
+        "active_has_time_line": "Line {0} {1}: status \"{2}\" is incomplete but Done is not -; check the status or reset Done to -.",
+        "dangling_ref": "Dangling reference: line {0} [[{1}]] points to a missing ID",
+        "pipe_escape_fix": "Escaped unescaped |: line {0} {1}",
+        "archive_moved": "Archived {0} record(s) → {1}",
+        "archive_none": "No completed old records matched the archive criteria",
+        "archive_as_of_bad": "--as-of must be YYYY-MM-DD: {0}",
+        "archive_output_same": "Archive output path is the same as the main file: {0}. Refusing to archive to avoid losing records; pick a different --output.",
+        "dup_id": "Duplicate ID: {0} at lines {1}",
+        "bad_id_line": "Line {0}: invalid ID \"{1}\", expected uppercase prefix + digits (e.g. BUG-001)",
+        "bad_id_on_add": "Invalid ID format: \"{0}\"; expected uppercase prefix + three digits (e.g. BUG-001).",
+        "prefix_mismatch_on_add": "ID {0} does not match the prefix {2}- expected by section \"{1}\".",
+        "dup_id_on_add": "ID already exists: {0}. --id cannot reuse an occupied ID; drop --id to auto-assign the next one, or specify an unused ID.",
+        "prefix_mismatch": "Line {0}: {1} is under \"{2}\" but this section expects prefix {3}-",
+        "warn_sparse_notes": "{0} records have empty or '-' notes; add files, tests, sources, or follow-up risks.",
+        "warn_completed_no_time": "{0} completed/fixed records are missing a Done time.",
+        "warn_active_has_time": "{0} incomplete records already have a Done time; check the status.",
+        "rec_profile_higher": "Content looks closer to {0}, above the chosen profile {1}; confirm whether to upgrade.",
+        "rec_legacy_research": "",
+        "rec_legacy_doc": "",
+        "rec_opt_without_section": "Optimize records exist but no \"Optimizations\" section; if there are many, use the extended profile.",
+        "rec_res_without_section": "RES- records exist but no \"Research\" section; add the section or migrate the records.",
+        "rec_priority_without_dev": "Priority field found but the \"Development\" extended section is not in use; check the dev table structure.",
+        "rec_single_date_schema": "- Info: this project uses the single-date schema (a legitimate variant); check validates against it. To upgrade to the dual-date model (Found/Done), use --migrate-schema (requires approval).",
+        "rec_dup_id_mapping": "- Suggestion: duplicate IDs detected; if cleaned up, add ADJ- records mapping old→new IDs to preserve audit traceability.",
+        "auto_fix_candidate": "Can add missing section: {0}",
+        "auto_fix_pipe": "Can escape unescaped |: line {0} {1}",
+        "add_section_fix": "Added missing section: {0}",
+        "migrate_header": "Migrate \"{0}\" header to {1}-column schema",
+        "migrate_skip": "⚠️ {0} (line {1}): {3} cells vs {2}-col legacy header; skipped — likely an unescaped | in a cell; fix manually",
+        "migrate_skips": "⚠️ {0} row(s) skipped due to column mismatch (likely an unescaped | in a cell; fix manually):",
+        "migrate_unknown_header": "Cannot migrate: section \"{0}\" header ({1} cols) is neither the standard dual-date schema nor a supported 6/8-col single-date legacy schema. Nothing was modified; check the column order manually before migrating.",
+        "check_ok": "Check passed: no invalid IDs, duplicate IDs, duplicate sections, column mismatches, enum issues, dangling references, or summary drift",
+        "section_not_found": "Section not found: {0}",
+        "section_not_found_with_list": "Section not found: {0}. Available sections: {1}",
+        "prefix_unknown": "Cannot infer ID prefix for section: {0}",
+        "bad_action": "Action not in enum: {0} (allowed: Fix, Develop, Optimize, Adjust, Plan, Review, Doc, Ops)",
+        "bad_status": "Status not in suggested enum: {0} (allowed: Pending Fix, Fixed, Todo, Pending Dev, In Progress, Done, Closed, Resolved)",
+        "bad_status_with_suggest": "Status not in suggested enum: {0} (suggest: {1}; allowed: Pending Fix, Fixed, Todo, Pending Dev, In Progress, Done, Closed, Resolved)",
+        "summary_stale": "Summary stale: {0} summary total={1} actual={2}",
+        "summary_stale_total": "Summary stale: Total summary={0} actual={1}",
+        "summary_synced": "Summary synced",
+        "nonstandard_header": "Section \"{0}\" header does not match a standard schema ({1} cols); refusing to write to avoid putting data in the wrong column. Fix the column order manually before add; if it is a supported 6/8-col single-date legacy schema, run standardize --migrate-schema.",
+        "bad_time": "Time format should be YYYY-MM-DD HH:MM: {0}",
+        "bad_lang": "Unsupported language: {0} (options: zh, en)",
+        "target_exists": "Target exists; use --force to overwrite: {0}",
+        "generated_file": "Generated: {0}",
+        "added": "Added: {0} -> {1}",
+        "updated": "Updated: {0}",
+        "field_not_applicable": "Field {0} does not apply to records in section \"{1}\" (no such column); nothing changed.",
+        "id_not_found": "ID not found: {0}",
+        "update_no_fields": "update requires at least one field (e.g. --status / --notes / --notes-append / --completed-time)",
+        "notes_conflict": "Cannot use both {0} and {1}",
+        "add_fields_required": "Without --from-json, --section / --action / --description / --status are required",
+        "from_json_bad": "Invalid --from-json content: {0}",
+        "from_json_entry_missing": "--from-json entry {0} missing field: {1}",
+        "check_failed_rollback": "Post-write check failed; rolled back this write:",
+        "maint_installed_rule": "Installed session-end sync rule → {0}",
+        "maint_rule_present": "Session-end sync rule already installed (skip) → {0}",
+        "maint_installed_hook": "Installed Stop hook → {0}",
+        "maint_hook_present": "Stop hook already installed (skip)",
+        "maint_hook_skipped": "Stop hook not installed (pass --with-hook to add it)",
+        "settings_bad_json": "Cannot parse {0}: invalid JSON ({1}). Aborted without modifying the file; fix the JSON manually, or back it up and remove it before retrying.",
+        "settings_bad_shape": "Cannot install Stop hook: {0} has invalid shape ({1}). Aborted without writing the hook script; fix hooks.Stop to be an array and retry.",
+        "report_written": "Report generated: {0}",
+        "fixes_applied": "Fixes applied: {0}",
+        "summary_updated": "Summary updated: {0}",
+        "by_section": "By section:",
+        "by_status": "By status:",
+        "total_count": "Total: {0}",
+    },
+}
+
+
+# Maintenance-rule detection markers. Must stay in sync with references/maintenance-rule.md:
+# the canonical rule block always carries this heading; the Stop hook command always names
+# the tasklist reminder script. standardize uses these to report whether the maintenance
+# rule / hook are already installed in the target project (read-only detection). The marker
+# is language-agnostic: the zh rule uses 「会话结束任务同步」 and the en rule uses the same
+# Chinese phrase is NOT reused — instead both locales mark the block with the same stable
+# token below so detection works regardless of the installed language.
+MAINTENANCE_RULE_MARKER = "会话结束任务同步"
+MAINTENANCE_RULE_MARKER_EN = "Session-end Task Sync"
+TASKLIST_HOOK_MARKER = "tasklist"
+# Wiki-style cross-refs inside cells: [[BUG-001]], [[DOC-036]]. Validated by check.
+WIKI_ID_REF_RE = re.compile(r"\[\[([A-Z]+-\d{3,})\]\]")
+# Common non-standard status → nearest standard suggestions (locale-keyed).
+STATUS_SUGGESTIONS: dict[str, dict[str, list[str]]] = {
+    "zh": {
+        "待处理": ["待办", "待开发"],
+        "未完成": ["待办", "进行中"],
+        "待办中": ["待办", "进行中"],
+        "处理中": ["进行中"],
+        "开发中": ["进行中", "待开发"],
+        "修复中": ["进行中", "待修复"],
+        "完成": ["已完成"],
+        "已做": ["已完成"],
+        "已修": ["已修复"],
+        "关闭": ["已关闭"],
+        "解决": ["已解决"],
+        "todo": ["待办"],
+        "done": ["已完成"],
+        "wip": ["进行中"],
+    },
+    "en": {
+        "pending": ["Todo", "Pending Dev"],
+        "todo": ["Todo"],
+        "to do": ["Todo"],
+        "to-do": ["Todo"],
+        "open": ["Todo", "Pending Dev"],
+        "wip": ["In Progress"],
+        "working": ["In Progress"],
+        "complete": ["Done"],
+        "completed": ["Done"],
+        "finished": ["Done"],
+        "fixed": ["Fixed"],
+        "closed": ["Closed"],
+        "resolved": ["Resolved"],
+        "待处理": ["Todo", "Pending Dev"],
+    },
+}
+
+

@@ -90,7 +90,9 @@ ipython_config.py
 .claude/settings.local.json
 
 # ─── 项目专属 (Project-specific) ─────────────────────────
-# 参考工作流的讨论与结构分析文档，仅本地留存，不入库
+# 参考工作流的讨论与结构分析文档（原 docs/，现为 design/），仅本地留存，不入库
+design/discussion/
+# 兼容旧路径（若本地仍残留 docs/discussion）
 docs/discussion/
 
 # 本项目自身的工作/配置文件，仅本地留存，不入库

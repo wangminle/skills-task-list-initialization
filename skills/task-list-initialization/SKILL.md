@@ -1,9 +1,11 @@
 ---
 name: task-list-initialization
-description: Use when a user wants to create, standardize, migrate, validate, or maintain a project-level task-list.md for software projects, agent projects, skills, workflows, planning docs, or AI collaboration rules.
+description: Use when creating, standardizing, migrating, validating, or maintaining a project-level task-list.md (bug/feature/review/test/doc/ops ledger). Trigger on 建立任务台账 / 整理 task-list / 初始化任务清单 / changelog 迁台账 / 会话结束同步任务 / set up a bug ledger / track bugs and features in one Markdown file — even if the user never says "task-list". Also for check/repair/archive and installing CLAUDE.md/AGENTS.md session-end sync rules. Do not use for ad-hoc TODOs, GitHub Issues I/O, or general PM tools.
 ---
 
 # Task List Initialization
+
+> Skill version **V0.3.0** (`Build0211`, 2026-08-04). Canonical string: repo root `VERSION`.
 
 ## Overview
 
@@ -17,7 +19,7 @@ The default model is intentionally small: a fixed header, task-type sections, an
 2. If no task list exists, create one from the standard template **in the user's language** (see Language below).
 3. If a task list exists, preserve records and normalize only with user approval.
 4. Use the standard categories and 7-column table unless project evidence calls for extensions.
-5. When the user wants future agents to keep the list updated, install maintenance rules (opt-in): write the canonical session-end sync rule into the project's agent file — `CLAUDE.md` if it exists, else `AGENTS.md`, else create `CLAUDE.md` — and optionally add the `Stop` hook for a reliable "every session" guarantee. Match the rule text and hook message to the task-list's language. Use the template and file-selection logic in `references/maintenance-rule.md`.
+5. When the user wants future agents to keep the list updated, install maintenance rules (opt-in). Prefer `install-maintenance` (and `--with-hook` when they want the Stop-hook guarantee). The command follows the same file-selection logic and rule text as `references/maintenance-rule.md` (`CLAUDE.md` if it exists, else `AGENTS.md`, else create `CLAUDE.md`), matched to the task-list's language. Ask before installing.
 6. Validate malformed/invalid ID formats, duplicate IDs, broken table rows, unsupported actions/statuses, invalid timestamps, and summary drift before finishing.
 7. For a task list that has been used for a while, use `standardize` first. It defaults to diagnostics and reporting only; run repair only when the user explicitly asks for it or passes repair flags.
 
@@ -51,9 +53,10 @@ Optional sections:
 - Use `BUG-001` style IDs: prefix + three-digit number. IDs are unique, increasing, and never reused.
 - Record both `发现时间` and `完成时间`. Use machine-local timezone timestamps in `YYYY-MM-DD HH:MM` 24-hour format. Use `-` for `完成时间` when the task is not complete.
 - Bug completion normally uses `已修复`; non-bug completion normally uses `已完成`.
-- Use `待修复`, `待开发`, `进行中`, `已关闭` only when the project needs active-state tracking.
+- Use `待修复` for open bugs; use `待办` as the generic open status for docs/ops/reviews/adjustments/optimizations/plans (or `待开发` for feature work). Also supported: `进行中`, `已关闭`, `已解决`.
 - `已解决` is allowed for troubleshooting items that are diagnosed and closed; prefer `已完成` otherwise. It counts as a completed status.
-- Escape literal pipes inside table cells as `\|`.
+- Escape literal pipes inside table cells as `\|`. `standardize --apply-safe-fixes` can auto-escape unescaped `|` in overwide rows when status/time columns still align after merge.
+- Cross-link entries with `[[BUG-001]]` / `[[DOC-036]]` wiki syntax; `check` reports dangling references.
 - Put implementation notes, changed files, review source, and validation results in `备注`.
 
 ## Project Variants
@@ -86,13 +89,13 @@ Use `standardize` when an existing `task-list.md` needs review, cleanup planning
 Default behavior is report-only and must not edit the task list:
 
 ```bash
-python3 skills/task-list-initialization/scripts/task_list_cli.py standardize --file task-list.md --report docs/task-list-standardize-report.md
+python3 "$SKILL_DIR/scripts/task_list_cli.py" standardize --file task-list.md --report docs/task-list-standardize-report.md
 ```
 
 Repair requires explicit flags:
 
-- `--apply-safe-fixes`: apply low-risk fixes such as adding missing empty standard sections.
-- `--migrate-schema`: migrate legacy single-date schemas to `发现时间 / 完成时间`. Data rows whose cell count doesn't match the header (usually an unescaped `|` in a cell) are left untouched and reported as `migrate_warnings` (in `--fix-only` and `--format json` output) instead of being silently skipped.
+- `--apply-safe-fixes`: apply low-risk fixes such as adding missing empty standard sections, and escaping unescaped `|` inside data cells when the row can be realigned (usually notes/description).
+- `--migrate-schema`: migrate legacy single-date schemas to `发现时间 / 完成时间`. Data rows whose cell count doesn't match the header (usually an unescaped `|` in a cell) are left untouched and reported as `migrate_warnings` (in `--fix-only` and `--format json` output) instead of being silently skipped; prefer `--apply-safe-fixes` first when the issue is only unescaped pipes.
 - `--fix-only`: output modifier — print only a repair summary (no full report); it does not trigger fixes itself, so pair it with `--apply-safe-fixes` or `--migrate-schema`.
 
 Do not automatically rename sections, move records between categories, or rewrite duplicate IDs without user approval. Those are semantic changes and should appear as report recommendations.
@@ -106,26 +109,58 @@ Do not automatically rename sections, move records between categories, or rewrit
 Every `standardize` report includes a **维护规则状态** section (read-only detection). It reports whether the project already has:
 
 - the canonical **会话结束任务同步** rule in `CLAUDE.md` / `AGENTS.md`, and
-- the optional **Stop hook** in `.claude/settings.json`.
+- the optional **Stop hook** in `.claude/settings.json`, and
+- **claim vs actual** consistency: if agent docs claim a Stop-hook / `settings.json` guarantee but no matching hook exists, the report flags `声明与实际不一致` (install the hook or soften the claim).
 
-When the rule is missing, ask the user whether they want future agents to keep the list updated. If they agree, install it exactly as in workflow step 5 — same template, same file-selection logic (`CLAUDE.md` > `AGENTS.md` > create `CLAUDE.md`), idempotent — using `references/maintenance-rule.md`. The CLI detects only; it never installs. When the rule is present but the Stop hook is not, offer the hook as an optional guarantee layer. Do not install anything without explicit user consent (opt-in).
+When the rule is missing, ask the user whether they want future agents to keep the list updated. If they agree, prefer `install-maintenance` (add `--with-hook` only when they also want the Stop-hook guarantee). That CLI path is idempotent and matches `references/maintenance-rule.md`. Manual install from the reference is still fine when the project needs custom wording. Do not install anything without explicit user consent (opt-in).
+
+### Archiving long-lived lists
+
+For large ledgers, archive completed records on demand (never automatic):
+
+```bash
+python3 "$SKILL_DIR/scripts/task_list_cli.py" archive --file task-list.md --older-than-days 90
+```
+
+Moves completed rows whose Done time is on/before `as-of − N days` into `task-list-archive-YYYYMM.md` (or `--output`). Active and recent completed rows stay in the main table. Subsequent `add` scans sibling `*archive*.md` files so archived IDs are never reused.
 
 ## CLI
 
-Use `scripts/task_list_cli.py` for repeatable operations. On Windows, replace `python3` with `python`.
+Use `$SKILL_DIR/scripts/task_list_cli.py` for repeatable operations. `$SKILL_DIR` is this skill's install root — typically `~/.claude/skills/task-list-initialization` (Claude Code) or the skill folder inside a project's `skills/` tree. On Windows, replace `python3` with `python`. Implementation lives under `scripts/_tasklist/` (`_locale.py` data/i18n, `_lib.py` commands); the entry script re-exports the same public API.
 
 ```bash
-python3 skills/task-list-initialization/scripts/task_list_cli.py init --output task-list.md
-python3 skills/task-list-initialization/scripts/task_list_cli.py init --lang en --profile extended --with-summary --output task-list.md
-python3 skills/task-list-initialization/scripts/task_list_cli.py add --file task-list.md --section "代码 Bug" --action 修复 --description "登录失败" --status 待修复 --notes "复现于本地"
-python3 skills/task-list-initialization/scripts/task_list_cli.py check --file task-list.md
-python3 skills/task-list-initialization/scripts/task_list_cli.py summary --file task-list.md
-python3 skills/task-list-initialization/scripts/task_list_cli.py summary --file task-list.md --write
-python3 skills/task-list-initialization/scripts/task_list_cli.py standardize --file task-list.md --report docs/task-list-standardize-report.md
-python3 skills/task-list-initialization/scripts/task_list_cli.py standardize --file task-list.md --migrate-schema --apply-safe-fixes
+SKILL_CLI="$SKILL_DIR/scripts/task_list_cli.py"   # or absolute path to task_list_cli.py
+
+python3 "$SKILL_CLI" init --output task-list.md
+python3 "$SKILL_CLI" init --lang en --profile extended --with-summary --output task-list.md
+python3 "$SKILL_CLI" sections --file task-list.md --format json
+python3 "$SKILL_CLI" add --file task-list.md --section "代码 Bug" --action 修复 --description "登录失败" --status 待修复 --notes "复现于本地"
+python3 "$SKILL_CLI" add --file task-list.md --section "代码 Bug" --action 修复 --description "含特殊字符" --status 待修复 --notes-file /tmp/notes.txt
+python3 "$SKILL_CLI" add --file task-list.md --from-json /tmp/entries.json
+python3 "$SKILL_CLI" update --file task-list.md --id BUG-001 --status 已修复 --completed-time "2026-08-04 16:00" --notes-append "测试通过"
+python3 "$SKILL_CLI" list --file task-list.md --status 待修复 --keyword sqlite
+python3 "$SKILL_CLI" install-maintenance --file task-list.md
+python3 "$SKILL_CLI" install-maintenance --file task-list.md --with-hook
+python3 "$SKILL_CLI" check --file task-list.md
+python3 "$SKILL_CLI" summary --file task-list.md
+python3 "$SKILL_CLI" summary --file task-list.md --write
+python3 "$SKILL_CLI" standardize --file task-list.md --report docs/task-list-standardize-report.md
+python3 "$SKILL_CLI" standardize --file task-list.md --migrate-schema --apply-safe-fixes
+python3 "$SKILL_CLI" archive --file task-list.md --older-than-days 90
 ```
 
-`init --lang {zh,en}` selects the template language (`zh` = Simplified Chinese, default; `en` = English). The other subcommands auto-detect the language from the target file. `check`/`standardize` accept `--schema {auto,dual,single}` (default `auto`) to validate a file that keeps the legacy single-date schema. `add` auto-matches the target section's schema and emits the corresponding column count, so no flag is needed. `check` also flags malformed IDs (e.g. `bug-001`, `BUG-12`) in the first column rather than silently skipping them, and validates timestamps. `add` refuses to write into a section whose header does not match a recognized schema (e.g. a reordered `ID / 状态 / 动作 / …`) instead of guessing the column layout — run `standardize --migrate-schema` or fix the header manually first.
+`init --lang {zh,en}` selects the template language (`zh` = Simplified Chinese, default; `en` = English). The other subcommands auto-detect the language from the target file. `check`/`standardize` accept `--schema {auto,dual,single}` (default `auto`) to validate a file that keeps the legacy single-date schema. `add` auto-matches the target section's schema and emits the corresponding column count, so no flag is needed. `check` also flags malformed IDs (e.g. `bug-001`, `BUG-12`) in the first column rather than silently skipping them, validates timestamps, reports dangling `[[ID]]` refs, and suggests nearest standard statuses for non-standard values. `add` refuses to write into a section whose header does not match a recognized schema (e.g. a reordered `ID / 状态 / 动作 / …`) instead of guessing the column layout — fix the header manually. `--migrate-schema` only upgrades supported 6/8-col single-date legacy schemas; it will refuse a reordered dual-date header rather than shift field meanings.
+
+**Write-path ergonomics:**
+
+- `add` / `update` run a structural `check` after writing by default; on failure they roll back the write and exit non-zero. Pass `--no-check` only when you intentionally need to write into an already-invalid file.
+- When the file already has a `统计摘要` / `Summary` section, `add` / `update` recompute it by default (`--no-sync-summary` to skip). `check` reports stale summary totals (摘要表过期).
+- Prefer `--notes-file` / `--description-file` (or `-` for stdin) for long Chinese text with quotes, semicolons, or pipes — avoids shell escaping. `--from-json` accepts a JSON array/object (or stdin via `-`) for batch adds and the same escaping safety.
+- `update --id …` patches fields in place (`--status`, `--notes` / `--notes-append`, `--completed-time`, …). It does **not** renumber IDs — use an `ADJ-` mapping record for ID corrections.
+- `sections` lists headings; `list` filters by `--id` / `--status` / `--section` / `--keyword`. Section aliases include ID prefixes (`CHK`, `ADJ`, …) and short Chinese names (`检查`, `调整`, …).
+- `install-maintenance` installs the session-end sync rule into `CLAUDE.md`/`AGENTS.md` (idempotent); `--with-hook` also installs the Stop hook.
+- `add --dry-run` prints only the row(s) that would be appended, not the whole file.
+- Invalid `--action` / `--status` errors list the allowed enum values.
 
 Run `--help` for all options. Prefer CLI generation for new files, then review the result manually for project-specific wording.
 
@@ -136,3 +171,5 @@ Run `--help` for all options. Prefer CLI generation for new files, then review t
 - `references/task-list-standard.md`: four-project summary, common rules, differences, risks, and maintenance guidance.
 - `references/task-list-template.md`: canonical Markdown templates for each profile.
 - `references/maintenance-rule.md`: canonical maintenance-rule text (Chinese and English), file-selection logic, language-matching guidance, and optional `Stop`-hook guarantee layer for installing into a project's `CLAUDE.md`/`AGENTS.md`.
+- `evals/evals.json`: skill-creator evaluation cases.
+- Repo root `VERSION`: current skill version string (`V0.3.0-Build0211-20260804`).

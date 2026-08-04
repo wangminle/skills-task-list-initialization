@@ -10,6 +10,7 @@
 > 说明：本文件是当前项目的任务清单。所有新增事项、状态变更和完成记录都应同步写入本文件。
 > 字段说明：动作字段只允许以下 8 个固定枚举：修复、开发、优化、调整、规划、检查、文档、运维。
 > 时间说明：发现时间和完成时间分开记录，格式为 YYYY-MM-DD HH:MM，使用机器本地时区的 24 小时制时间；未完成事项的完成时间填 -。
+> 状态说明：Bug 未完成用待修复，通用未完成用待办（或待开发），进行中/已完成/已修复/已关闭/已解决按语义选用；条目互引用 [[BUG-001]] 语法。
 > 归并规则：审计、复核、核查、审查、验证、评估统一记为“检查”；重构、清理统一记为“优化”；方案、梳理统一记为“规划”；记录类文档事项统一记为“文档”。
 
 ## 代码 Bug
@@ -126,6 +127,7 @@ Records all project tasks: bugs, bug-to-requirement conversions, new requirement
 > Note: This file is the project's task list. All new items, status changes, and completion records should be synced into this file.
 > Fields: The Action field allows only these 8 fixed values: Fix, Develop, Optimize, Adjust, Plan, Review, Doc, Ops.
 > Time: Found and Done are recorded separately in YYYY-MM-DD HH:MM format, using the machine's local timezone in 24-hour time; for incomplete items, Done is -.
+> Status: Use Pending Fix for open bugs, Todo (or Pending Dev) for other open work, plus In Progress / Done / Fixed / Closed / Resolved. Cross-link items with [[BUG-001]].
 > Merging: Audit/Recheck/Verify/Review/Validate/Assess are unified as "Review"; Refactor/Cleanup as "Optimize"; Proposal/Outline as "Plan"; record-style documentation items as "Doc".
 
 ## Bugs
