@@ -13,15 +13,40 @@ from pathlib import Path
 from ._locale import *  # noqa: F403
 
 def text_claims_stop_hook(text: str) -> bool:
-    """True when agent docs claim a Stop-hook / settings.json guarantee layer exists."""
+    """True when agent docs claim a Stop-hook / settings.json guarantee layer exists.
+
+    Only an UNCONDITIONAL claim counts as a mismatch risk — e.g. "a Stop hook guarantees the
+    sync runs". The official maintenance-rule template is conditional: it says the hook
+    guarantees the trigger *when configured*, AND explicitly provides the no-hook fallback
+    ("未配置时由 agent 自觉执行" / "without a hook, the agent runs the sync on its own"). That
+    conditional wording must NOT be flagged, because installing the rule without --with-hook is
+    a documented, valid state. BUG-036: the old test matched "stop hook" + "保证/guarantee"
+    keywords anywhere and could not tell the two apart, so the official rule (installed without
+    a hook) falsely reported a claim mismatch.
+    """
     # Strip markdown noise so `Stop` hook / `.claude/settings.json` still match.
     flat = re.sub(r"[`*_]", "", text)
     lower = flat.lower()
     mentions_hook = bool(re.search(r"stop\s*hook", lower)) or (
         "settings.json" in lower and "hook" in lower
     )
+    if not mentions_hook:
+        return False
     guarantees = ("保证" in flat) or bool(re.search(r"guarante|ensur", lower))
-    return mentions_hook and guarantees
+    if not guarantees:
+        return False
+    # Conditional/fallback wording present → the doc is NOT making an unconditional claim, so
+    # a missing hook is expected and not a mismatch. Detect both the zh and en fallback phrases
+    # used by the official template, plus generic "when/if configured" conditionals.
+    has_fallback = (
+        ("未配置时" in flat and "自觉" in flat)
+        or ("without a hook" in lower)
+        or ("when no hook" in lower)
+        or ("no hook is" in lower)
+    )
+    if has_fallback:
+        return False
+    return True
 
 
 def suggest_status(raw: str, locale: Locale) -> list[str]:
@@ -42,6 +67,22 @@ def get_locale(lang: str) -> Locale:
     if lang not in LOCALES:
         raise SystemExit(T["zh"]["bad_lang"].format(lang))
     return LOCALES[lang]
+
+
+def read_task_list(path: Path, *, lang: str = "zh") -> str:
+    """Read a task-list file with localized, single-line errors (BUG-028/BUG-038).
+
+    Wraps read_text so FileNotFoundError / IsADirectoryError / UnicodeDecodeError / Permission
+    errors surface as a clean SystemExit message instead of a raw Python traceback, which
+    pollutes the agent's context and is not localizable. Every command entry point should
+    read the target file through this helper.
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise SystemExit(T[lang]["file_not_found"].format(path))
+    except (IsADirectoryError, PermissionError, UnicodeDecodeError, OSError) as exc:
+        raise SystemExit(T[lang]["file_not_readable"].format(path, exc)) from exc
 
 
 def detect_locale(text: str) -> str:
@@ -87,25 +128,62 @@ def to_single_date_columns(columns: tuple[str, ...], locale: Locale) -> tuple[st
     return tuple(out)
 
 
-def is_supported_legacy_header(cells: list[str], section: Section, locale: Locale) -> bool:
-    """True iff `cells` is a supported 6/8-col single-date legacy header for this section.
-
-    Accepts the canonical single-date column name (完成日期 / Done Date) and its aliases
-    (发现日期 / Found Date) in the date slot. Reordered dual-date headers and other
-    non-legacy shapes return False so migrate refuses instead of shifting field meanings.
-    """
-    canonical = list(to_single_date_columns(section.columns, locale))
-    if len(cells) != len(canonical):
-        return False
+def _single_date_slot_name(headers: list[str], canonical_single: list[str], locale: Locale) -> str | None:
+    """Return the actual date-column label when headers match a single-date shape, else None."""
     single = SINGLE_DATE_COL[locale.name]
     aliases = set(SINGLE_DATE_ALIASES[locale.name])
-    for actual, expected in zip(cells, canonical):
+    if len(headers) != len(canonical_single):
+        return None
+    date_name: str | None = None
+    for actual, expected in zip(headers, canonical_single):
         if expected == single:
             if actual not in aliases:
-                return False
+                return None
+            date_name = actual
         elif actual != expected:
-            return False
-    return True
+            return None
+    return date_name
+
+
+def matches_single_date_header(
+    headers: list[str], section: Section, locale: Locale
+) -> str | None:
+    """If headers are a compatible single-date shape for the section, return the date label.
+
+    Accepts every label in SINGLE_DATE_ALIASES (完成日期/发现日期/开始日期/规划日期 and en
+    equivalents). Used by check/add so the three paths share one recognition rule (BUG-026).
+    """
+    return _single_date_slot_name(
+        headers, list(to_single_date_columns(section.columns, locale)), locale
+    )
+
+
+def date_column_semantic(date_header: str, locale: Locale) -> str | None:
+    """Map a single-date column label to found/completed/started/planned, or None."""
+    return DATE_COLUMN_SEMANTICS[locale.name].get(date_header)
+
+
+def is_supported_legacy_header(cells: list[str], section: Section, locale: Locale) -> bool:
+    """True iff `cells` is a losslessly-migrateable 6/8-col single-date legacy header.
+
+    Only found/completed semantics migrate (REQ-02/REQ-03). started/planned match the
+    single-date *shape* for check/add but are unmappable — use matches_single_date_header
+    + date_column_semantic for those. Reordered dual-date headers return False.
+    """
+    date_name = matches_single_date_header(cells, section, locale)
+    if date_name is None:
+        return False
+    return date_column_semantic(date_name, locale) in MIGRATEABLE_DATE_SEMANTICS
+
+
+def is_unmappable_legacy_header(cells: list[str], section: Section, locale: Locale) -> str | None:
+    """Return the date column name when the header is known but not losslessly migrateable."""
+    date_name = matches_single_date_header(cells, section, locale)
+    if date_name is None:
+        return None
+    if date_column_semantic(date_name, locale) in UNMAPPABLE_DATE_SEMANTICS:
+        return date_name
+    return None
 
 
 def detect_schema(text: str, locale: Locale) -> str:
@@ -239,6 +317,21 @@ def escape_cell(value: str) -> str:
     return value or "-"
 
 
+def _is_separator_row(cells: list[str]) -> bool:
+    """True iff cells form a markdown table separator (e.g. | --- | :--- |).
+
+    Every cell must contain only separator characters (-, :, space), AND at least one cell
+    must contain a dash or colon. This rejects all-blank rows (| | | |) which the old
+    `all(set(cell) <= {-, :, ' '})` test mistook for separators because the empty string is a
+    subset of every set — see BUG-039. A row with only spaces is a data row, not a separator.
+    """
+    if not cells:
+        return False
+    if not all(set(cell) <= {"-", ":", " "} for cell in cells):
+        return False
+    return any("-" in cell or ":" in cell for cell in cells)
+
+
 def parse_sections(text: str) -> dict[str, dict[str, object]]:
     sections: dict[str, dict[str, object]] = {}
     current: str | None = None
@@ -254,7 +347,14 @@ def parse_sections(text: str) -> dict[str, dict[str, object]]:
                 continue
             if cells and cells[0] == "ID":
                 sections[current]["headers"] = cells
-            elif cells and not all(set(cell) <= {"-", ":", " "} for cell in cells):
+            elif _is_separator_row(cells):
+                # A real separator row (| --- | :--- |) — skip it. BUG-039: an all-empty row
+                # (| | | |, every cell "") used to match this branch because set("") <= any set,
+                # so it was silently dropped as a separator and never reached check/summary.
+                # _is_separator_row requires at least one cell to contain a dash or colon, which
+                # distinguishes a genuine separator from an all-blank data row.
+                continue
+            else:
                 sections[current]["rows"].append((index, cells))
     return sections
 
@@ -318,10 +418,14 @@ def resolve_text_option(
     return default
 
 
-def validate_action_status(action: str, status: str, locale: Locale) -> None:
+def validate_action_status(action: str, status: str | None, locale: Locale) -> None:
     lang = locale.name
     if action not in locale.actions:
         raise SystemExit(T[lang]["bad_action"].format(action))
+    # status may be None when the section header has no 状态/Status column (BUG-030): in that
+    # case there is no status to cross-validate, so skip the status half of the check.
+    if status is None:
+        return
     if status not in locale.statuses:
         suggestions = suggest_status(status, locale)
         if suggestions:
@@ -350,12 +454,7 @@ def build_row_for_headers(
 ) -> list[str]:
     """Build a data row aligned to the section header schema (dual/single/dev)."""
     lang = locale.name
-    dev_dual = list(locale.dev_extended.columns)
-    dev_single = list(to_single_date_columns(locale.dev_extended.columns, locale))
-    section_dual = list(section.columns)
-    section_single = list(to_single_date_columns(section.columns, locale))
-
-    if headers == dev_dual:
+    if headers == list(locale.dev_extended.columns):
         return [
             item_id,
             action,
@@ -367,7 +466,13 @@ def build_row_for_headers(
             status,
             notes,
         ]
-    if headers == dev_single:
+    if headers == list(section.columns):
+        return [item_id, action, description, found_time, completed_time, status, notes]
+    # Compatible single-date shape for this section (完成日期/发现日期/开始日期/规划日期).
+    if matches_single_date_header(headers, section, locale) is not None:
+        return [item_id, action, description, single_date, status, notes]
+    # 8-col development single-date (section may already be locale.dev_extended).
+    if matches_single_date_header(headers, locale.dev_extended, locale) is not None:
         return [
             item_id,
             action,
@@ -378,10 +483,6 @@ def build_row_for_headers(
             status,
             notes,
         ]
-    if headers == section_dual:
-        return [item_id, action, description, found_time, completed_time, status, notes]
-    if headers == section_single:
-        return [item_id, action, description, single_date, status, notes]
     raise SystemExit(T[lang]["nonstandard_header"].format(section_title, len(headers)))
 
 
@@ -489,12 +590,20 @@ def find_record_line(
 def header_field_index(headers: list[str], locale: Locale) -> dict[str, int]:
     """Map logical field names to column indices for the given header row."""
     dual_found, dual_done = DUAL_DATE_COLS[locale.name]
-    single = SINGLE_DATE_COL[locale.name]
+    semantics = DATE_COLUMN_SEMANTICS[locale.name]
+    found_aliases = {name for name, sem in semantics.items() if sem == "found"}
+    completed_aliases = {name for name, sem in semantics.items() if sem == "completed"}
+    # started/planned stay as single-date "date" columns for time validation only — they are
+    # not dual-model found/completed fields (BUG-026).
+    other_single = {
+        name for name, sem in semantics.items() if sem in UNMAPPABLE_DATE_SEMANTICS
+    }
     aliases = {
         "action": {"动作", "Action"},
         "description": {"问题描述", "事项", "Description", "Item"},
-        "found_time": {dual_found},
-        "completed_time": {dual_done, single, *SINGLE_DATE_ALIASES[locale.name]},
+        "found_time": {dual_found, *found_aliases},
+        "completed_time": {dual_done, *completed_aliases},
+        "single_date": {*found_aliases, *completed_aliases, *other_single},
         "status": {"状态", "Status"},
         "notes": {"备注", "Notes"},
         "priority": {"优先级", "Priority"},
@@ -670,31 +779,63 @@ def default_completed_time(status: str, now: str, locale: Locale) -> str:
     return "-"
 
 
-def legacy_time(value: str) -> str:
-    value = value.strip()
-    if value == "-":
-        return value
-    if re.match(r"^\d{4}-\d{2}-\d{2}$", value):
-        return f"{value} 00:00"
-    if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", value):
-        return value
+def preserve_date_precision(value: str) -> str:
+    """Pass through a legacy date cell without inventing minute precision (BUG-026 / REQ-01).
+
+    Day-only values stay `YYYY-MM-DD`; already-timed values stay as-is. Missing stays `-`.
+    New writes via normalize_time may still pad 00:00 — that path is for freshly authored
+    records, not historical migration.
+    """
+    value = (value or "").strip()
+    if not value:
+        return "-"
     return value
 
 
+def legacy_time(value: str) -> str:
+    """Deprecated shim: prefer preserve_date_precision for migration.
+
+    Kept for single_date_cell / callers that already pass through normalize_time (which
+    pads 00:00 for new records). Does NOT pad day-only values anymore (BUG-026).
+    """
+    return preserve_date_precision(value)
+
+
+def map_legacy_date_to_dual(date_value: str, semantic: str) -> tuple[str, str]:
+    """Map one legacy single-date cell onto (found_time, completed_time) by semantic.
+
+    Never copies across semantics and never invents 00:00 (BUG-026 / REQ-01 / REQ-02).
+    """
+    preserved = preserve_date_precision(date_value)
+    if semantic == "found":
+        return preserved, "-"
+    if semantic == "completed":
+        return "-", preserved
+    raise ValueError(f"unmigrateable date semantic: {semantic}")
+
+
 def legacy_completed_time(value: str, status: str, locale: Locale) -> str:
+    """Deprecated: cross-semantic copy removed (BUG-026). Prefer map_legacy_date_to_dual."""
     if status in locale.completed_statuses:
-        return legacy_time(value)
+        return preserve_date_precision(value)
     return "-"
 
 
 def single_date_cell(
-    args: argparse.Namespace, status: str, now: str, locale: Locale
+    args: argparse.Namespace, status: str, now: str, locale: Locale, *, semantic: str = "completed"
 ) -> str:
-    """Build the lone date column for a single-date schema row."""
+    """Build the lone date column for a single-date schema row.
+
+    completed semantic: only completed statuses get a date (pending stays `-`).
+    found / started / planned semantic: the column is the record's sole date, so pending
+    rows still receive `--date` / now (BUG-026 / REQ-05).
+    """
     raw = args.date or args.completed_time or ""
-    if status in locale.completed_statuses:
-        return legacy_time(normalize_time(raw or now, now, locale))
-    return "-"
+    if semantic == "completed":
+        if status in locale.completed_statuses:
+            return normalize_time(raw or now, now, locale)
+        return "-"
+    return normalize_time(raw or now, now, locale)
 
 
 def table_line(cells: list[str]) -> str:
@@ -863,6 +1004,12 @@ def _append_one_entry(
         date=date_val,
         completed_time=completed_value,
     )
+    date_header = matches_single_date_header(headers, section, locale)
+    if date_header is None and section.title != locale.dev_extended.title:
+        date_header = matches_single_date_header(headers, locale.dev_extended, locale)
+    semantic = date_column_semantic(date_header, locale) if date_header else "completed"
+    if semantic is None:
+        semantic = "completed"
     row = build_row_for_headers(
         headers,
         section,
@@ -875,7 +1022,7 @@ def _append_one_entry(
         completed_time=completed_time,
         priority=str(entry["priority"]) if entry.get("priority") else None,
         estimate=str(entry["estimate"]) if entry.get("estimate") else None,
-        single_date=single_date_cell(ns, status, now, locale),
+        single_date=single_date_cell(ns, status, now, locale, semantic=semantic),
         locale=locale,
         section_title=section_title,
     )
@@ -884,7 +1031,7 @@ def _append_one_entry(
 
 def command_add(args: argparse.Namespace) -> int:
     path = Path(args.file)
-    original = path.read_text(encoding="utf-8")
+    original = read_task_list(path)
     locale = get_locale(detect_locale(original))
     lang = locale.name
 
@@ -962,7 +1109,7 @@ def command_add(args: argparse.Namespace) -> int:
 
 def command_update(args: argparse.Namespace) -> int:
     path = Path(args.file)
-    original = path.read_text(encoding="utf-8")
+    original = read_task_list(path)
     locale = get_locale(detect_locale(original))
     lang = locale.name
 
@@ -1022,11 +1169,25 @@ def command_update(args: argparse.Namespace) -> int:
 
     if args.action is not None:
         if "action" not in indices:
-            raise SystemExit(T[lang]["nonstandard_header"].format(title, len(headers)))
-        status_for_check = args.status if args.status is not None else cells[indices["status"]]
+            raise SystemExit(T[lang]["field_not_applicable"].format("--action", title))
+        # BUG-030: --action's status-for-cross-check lookup crashed with KeyError when the
+        # header has no 状态/Status column. Only read the existing status when the column
+        # exists; when there is no status column AND no --status was passed, validate the
+        # action in isolation (no status to cross-check against).
+        if args.status is not None:
+            status_for_check: str | None = args.status
+        elif "status" in indices:
+            status_for_check = cells[indices["status"]]
+        else:
+            status_for_check = None
         validate_action_status(args.action, status_for_check, locale)
         cells[indices["action"]] = args.action
-    if description is not None and "description" in indices:
+    if description is not None:
+        # BUG-032: silently skipping when the column is absent, while reporting "已更新", is a
+        # data-integrity lie. The other field branches reject with field_not_applicable; notes
+        # and description must do the same for consistency.
+        if "description" not in indices:
+            raise SystemExit(T[lang]["field_not_applicable"].format("--description", title))
         cells[indices["description"]] = description
     if args.status is not None:
         if "status" not in indices:
@@ -1057,9 +1218,15 @@ def command_update(args: argparse.Namespace) -> int:
             raise SystemExit(T[lang]["field_not_applicable"].format("--estimate", title))
         cells[indices["estimate"]] = args.estimate
 
-    if notes_override is not None and "notes" in indices:
+    if notes_override is not None:
+        # BUG-032: --notes must reject with field_not_applicable when the column is absent,
+        # not silently skip while reporting "已更新" — the other field branches already do.
+        if "notes" not in indices:
+            raise SystemExit(T[lang]["field_not_applicable"].format("--notes", title))
         cells[indices["notes"]] = notes_override
-    if notes_append is not None and "notes" in indices:
+    if notes_append is not None:
+        if "notes" not in indices:
+            raise SystemExit(T[lang]["field_not_applicable"].format("--notes-append", title))
         cells[indices["notes"]] = append_notes(cells[indices["notes"]], notes_append)
 
     # If status flipped to completed and completed_time not explicitly set, default to now
@@ -1076,10 +1243,16 @@ def command_update(args: argparse.Namespace) -> int:
     # Mirror image: if status flipped back to incomplete (待办/进行中/…) and the caller did
     # not explicitly set a completed time, reset the Done cell to "-" — per the documented
     # time/status constraint an unfinished record must not keep a completion time.
+    # BUG-031: this reset is DUAL-schema only. On a single-date schema the lone 完成日期 /
+    # Done Date column is also mapped as completed_time, but pending rows legitimately carry a
+    # date there (it is the record's only date, not a completion timestamp). check explicitly
+    # exempts single-date from the same constraint, so update must match. found_time is present
+    # only in the dual schema (发现时间 / Found), so its absence marks single-date.
     if (
         args.status is not None
         and args.status in locale.pending_statuses
         and args.completed_time is None
+        and "found_time" in indices
         and "completed_time" in indices
         and cells[indices["completed_time"]] != "-"
     ):
@@ -1109,7 +1282,7 @@ def command_update(args: argparse.Namespace) -> int:
 
 def command_sections(args: argparse.Namespace) -> int:
     path = Path(args.file)
-    text = path.read_text(encoding="utf-8")
+    text = read_task_list(path)
     locale = get_locale(detect_locale(text))
     sections = parse_sections(text)
     rows = []
@@ -1142,9 +1315,10 @@ def command_sections(args: argparse.Namespace) -> int:
 
 def command_list(args: argparse.Namespace) -> int:
     path = Path(args.file)
-    text = path.read_text(encoding="utf-8")
+    text = read_task_list(path)
     locale = get_locale(detect_locale(text))
     records = collect_records(text)
+    headers_by_title = section_headers_by_title(text)
     section_filter = None
     if args.section:
         sections = parse_sections(text)
@@ -1156,21 +1330,28 @@ def command_list(args: argparse.Namespace) -> int:
             continue
         if section_filter and title != section_filter:
             continue
-        status = cells[-2] if len(cells) >= 2 else ""
+        headers = headers_by_title.get(title, [])
+        # BUG-037: read status/notes BY HEADER NAME, not cells[-2]/cells[-1]. A row whose notes
+        # cell contains an unescaped pipe splits into extra cells, so cells[-2] lands on a notes
+        # fragment and the status filter silently misses the record.
+        status = cell_at_field(cells, headers, "status", locale, fallback=-2)
         if args.status and status != args.status:
             continue
         if args.keyword:
             hay = " ".join(cells).lower()
             if args.keyword.lower() not in hay:
                 continue
+        action = cell_at_field(cells, headers, "action", locale, fallback=1)
+        description = cell_at_field(cells, headers, "description", locale, fallback=2)
+        notes = cell_at_field(cells, headers, "notes", locale, fallback=-1)
         results.append(
             {
                 "id": cells[0],
                 "section": title,
-                "action": cells[1] if len(cells) > 1 else "",
-                "description": cells[2] if len(cells) > 2 else "",
+                "action": action,
+                "description": description,
                 "status": status,
-                "notes": cells[-1] if cells else "",
+                "notes": notes,
                 "line": line_no,
                 "cells": cells,
             }
@@ -1222,11 +1403,65 @@ touch "$guard"
 python3 -c 'import json; print(json.dumps({"decision":"block","reason":"Before this session ends, follow the Session-end Task Sync rule in CLAUDE.md: if this session completed work, sync new entries and status changes into the root task-list.md and tell the user in your reply; otherwise briefly state there is nothing to sync. This reminder fires once per session."}))'
 """
 
+# Claude Code expands ${CLAUDE_PROJECT_DIR} and also exports it; relative `.claude/hooks/...`
+# breaks when the hook cwd is a subdirectory (e.g. runtime/) or an internal helper path.
+TASKLIST_HOOK_COMMAND = (
+    'bash "${CLAUDE_PROJECT_DIR}/.claude/hooks/tasklist_sync_reminder.sh"'
+)
+
+
+def _load_settings_for_hooks(settings_path: Path, m: dict[str, str]) -> dict:
+    """Parse settings.json and ensure hooks.Stop is a writable list; abort on bad shape."""
+    settings: dict = {"hooks": {"Stop": []}}
+    if settings_path.exists():
+        try:
+            loaded = json.loads(settings_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise SystemExit(m["settings_bad_json"].format(settings_path, exc)) from exc
+        if not isinstance(loaded, dict):
+            raise SystemExit(m["settings_bad_shape"].format(settings_path, "root must be a JSON object"))
+        settings = loaded
+    hooks = settings.get("hooks", {"Stop": []})
+    if hooks is None:
+        hooks = {"Stop": []}
+        settings["hooks"] = hooks
+    elif not isinstance(hooks, dict):
+        raise SystemExit(
+            m["settings_bad_shape"].format(settings_path, '"hooks" must be a JSON object or null')
+        )
+    stop_list = hooks.get("Stop", [])
+    if stop_list is None:
+        stop_list = []
+        hooks["Stop"] = stop_list
+    elif not isinstance(stop_list, list):
+        raise SystemExit(
+            m["settings_bad_shape"].format(settings_path, '"hooks.Stop" must be a JSON array or null')
+        )
+    return settings
+
+
+def _upgrade_tasklist_hook_commands(stop_list: list) -> bool:
+    """Rewrite legacy relative-path tasklist hooks to CLAUDE_PROJECT_DIR form."""
+    changed = False
+    for item in stop_list:
+        if not isinstance(item, dict):
+            continue
+        for hook in item.get("hooks", []) or []:
+            if not isinstance(hook, dict):
+                continue
+            cmd = str(hook.get("command", ""))
+            if TASKLIST_HOOK_MARKER not in cmd:
+                continue
+            if "CLAUDE_PROJECT_DIR" not in cmd:
+                hook["command"] = TASKLIST_HOOK_COMMAND
+                changed = True
+    return changed
+
 
 def command_install_maintenance(args: argparse.Namespace) -> int:
     path = Path(args.file)
     project_root = path.resolve().parent
-    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    text = read_task_list(path) if path.exists() else ""
     locale = get_locale(detect_locale(text) if text else "zh")
     lang = locale.name
     m = T[lang]
@@ -1275,7 +1510,27 @@ def command_install_maintenance(args: argparse.Namespace) -> int:
     hook_script = project_root / ".claude" / "hooks" / "tasklist_sync_reminder.sh"
     status = detect_maintenance_rule(project_root)
     if status.get("hook_installed"):
-        print(m["maint_hook_present"])
+        # Idempotent path: still upgrade legacy relative commands / rewrite missing script.
+        if args.dry_run:
+            print(m["maint_hook_present"])
+            return 0
+        settings = _load_settings_for_hooks(settings_path, m)
+        stop_list = settings["hooks"]["Stop"]
+        upgraded = _upgrade_tasklist_hook_commands(stop_list)
+        script = HOOK_SCRIPT_ZH if lang == "zh" else HOOK_SCRIPT_EN
+        hook_script.parent.mkdir(parents=True, exist_ok=True)
+        desired = script.replace("CLAUDE.md", rule_file_name)
+        if (not hook_script.exists()) or hook_script.read_text(encoding="utf-8") != desired:
+            hook_script.write_text(desired, encoding="utf-8")
+            hook_script.chmod(hook_script.stat().st_mode | 0o111)
+        if upgraded:
+            settings_path.parent.mkdir(parents=True, exist_ok=True)
+            settings_path.write_text(
+                json.dumps(settings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            )
+            print(m["maint_hook_upgraded"])
+        else:
+            print(m["maint_hook_present"])
         return 0
 
     if args.dry_run:
@@ -1284,31 +1539,8 @@ def command_install_maintenance(args: argparse.Namespace) -> int:
 
     # Parse and shape-check settings.json BEFORE writing the hook script, so a malformed
     # but parseable file (hooks:null / Stop as dict) aborts cleanly with no half-install.
-    settings: dict = {"hooks": {"Stop": []}}
-    if settings_path.exists():
-        try:
-            loaded = json.loads(settings_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise SystemExit(m["settings_bad_json"].format(settings_path, exc)) from exc
-        if not isinstance(loaded, dict):
-            raise SystemExit(m["settings_bad_shape"].format(settings_path, "root must be a JSON object"))
-        settings = loaded
-    hooks = settings.get("hooks", {"Stop": []})
-    if hooks is None:
-        hooks = {"Stop": []}
-        settings["hooks"] = hooks
-    elif not isinstance(hooks, dict):
-        raise SystemExit(
-            m["settings_bad_shape"].format(settings_path, '"hooks" must be a JSON object or null')
-        )
-    stop_list = hooks.get("Stop", [])
-    if stop_list is None:
-        stop_list = []
-        hooks["Stop"] = stop_list
-    elif not isinstance(stop_list, list):
-        raise SystemExit(
-            m["settings_bad_shape"].format(settings_path, '"hooks.Stop" must be a JSON array or null')
-        )
+    settings = _load_settings_for_hooks(settings_path, m)
+    stop_list = settings["hooks"]["Stop"]
 
     # The reminder text must name the agent file that actually holds the rule.
     script = HOOK_SCRIPT_ZH if lang == "zh" else HOOK_SCRIPT_EN
@@ -1321,7 +1553,7 @@ def command_install_maintenance(args: argparse.Namespace) -> int:
         "hooks": [
             {
                 "type": "command",
-                "command": "bash .claude/hooks/tasklist_sync_reminder.sh",
+                "command": TASKLIST_HOOK_COMMAND,
             }
         ],
     }
@@ -1338,6 +1570,8 @@ def command_install_maintenance(args: argparse.Namespace) -> int:
             break
     if not already:
         stop_list.append(entry)
+    else:
+        _upgrade_tasklist_hook_commands(stop_list)
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     settings_path.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(m["maint_installed_hook"].format(".claude/hooks/tasklist_sync_reminder.sh"))
@@ -1351,6 +1585,50 @@ def collect_records(text: str) -> list[tuple[str, int, list[str]]]:
             if cells and re.match(r"^[A-Z]+-\d{3,}$", cells[0]):
                 records.append((title, line_no + 1, cells))
     return records
+
+
+def _collect_wiki_refs(text: str) -> list[tuple[int, str]]:
+    """Yield (1-based line_no, ref_id) for every [[ID]] wiki ref in data rows."""
+    refs: list[tuple[int, str]] = []
+    for info in parse_sections(text).values():
+        for line_no, cells in info.get("rows", []):
+            for cell in cells:
+                for match in WIKI_ID_REF_RE.finditer(cell):
+                    refs.append((line_no + 1, match.group(1)))
+    return refs
+
+
+def section_headers_by_title(text: str) -> dict[str, list[str]]:
+    """Map each section title → its header cells (empty list when absent).
+
+    Lets list/summary locate the 状态/Status and 备注/Notes columns BY NAME instead of
+    guessing with cells[-2] / cells[-1], which mis-indexes rows with unescaped pipes in notes
+    (BUG-027/BUG-037): an over-wide row's cells[-2] lands on a notes fragment, not the status.
+    """
+    return {
+        title: list(info.get("headers") or [])
+        for title, info in parse_sections(text).items()
+    }
+
+
+def cell_at_field(
+    cells: list[str], headers: list[str], field: str, locale: Locale, *, fallback: int | None = None
+) -> str:
+    """Read a cell value by its logical field name, located from the section header.
+
+    Falls back to a positional index (e.g. -2 for status) only when the header has no
+    recognized column name AND a fallback is given. Without a recognized header AND no
+    fallback, returns "" so callers do not crash on short rows.
+    """
+    if headers:
+        idx = header_field_index(headers, locale).get(field)
+        if idx is not None and 0 <= idx < len(cells):
+            return cells[idx]
+    if fallback is not None:
+        pos = fallback if fallback >= 0 else len(cells) + fallback
+        if 0 <= pos < len(cells):
+            return cells[pos]
+    return ""
 
 
 def infer_profile(text: str, sections: dict[str, dict[str, object]], locale: Locale) -> str:
@@ -1415,18 +1693,23 @@ def prefix_mismatches(
 
 
 def record_quality_warnings(
-    records: list[tuple[str, int, list[str]]], locale: Locale
+    records: list[tuple[str, int, list[str]]], locale: Locale,
+    headers_by_title: dict[str, list[str]] | None = None,
 ) -> list[str]:
     warnings: list[str] = []
     sparse_notes = 0
     completed_without_time = 0
     active_without_completed_dash = 0
-    for _, _, cells in records:
+    headers_by_title = headers_by_title or {}
+    for title, _, cells in records:
         if len(cells) < 6:
             continue
-        status = cells[-2]
-        notes = cells[-1]
-        completed_time = cells[-3]
+        headers = headers_by_title.get(title, [])
+        # BUG-027/BUG-037: locate status/notes/completed-time BY HEADER NAME so an unescaped
+        # pipe in notes (which splits the row into extra cells) no longer mis-indexes these.
+        status = cell_at_field(cells, headers, "status", locale, fallback=-2)
+        notes = cell_at_field(cells, headers, "notes", locale, fallback=-1)
+        completed_time = cell_at_field(cells, headers, "completed_time", locale, fallback=-3)
         if notes in {"", "-"}:
             sparse_notes += 1
         if status in locale.completed_statuses and completed_time == "-":
@@ -1482,13 +1765,14 @@ def analyze_standardization(
 ) -> dict[str, object]:
     sections = parse_sections(text)
     records = collect_records(text)
+    headers_by_title = section_headers_by_title(text)
     inferred = infer_profile(text, sections, locale)
     chosen = target_profile(requested_profile, inferred)
     schema = schema_override if schema_override != "auto" else detect_schema(text, locale)
     structural_issues = check_text(text, locale, schema)
     prefix_issues = prefix_mismatches(records, locale)
     missing = missing_sections_for_profile(sections, chosen, locale)
-    quality = record_quality_warnings(records, locale)
+    quality = record_quality_warnings(records, locale, headers_by_title)
     recommendations = classify_extension_recommendations(inferred, chosen, records, sections, locale)
     if schema == "single":
         recommendations.append(T[locale.name]["rec_single_date_schema"])
@@ -1666,6 +1950,37 @@ def detect_maintenance_rule(project_root: Path) -> dict[str, object]:
 
 
 def migrate_legacy_schema(text: str, locale: Locale) -> tuple[str, list[str], list[str]]:
+    """Upgrade losslessly-migrateable single-date headers to dual-date (BUG-026).
+
+    Pre-scans every section header first (MigrationPlan lite): if any section uses an
+    unmappable date semantic (开始日期/规划日期) or an unknown header, refuse with a
+    clear message and leave the file untouched. Only found/completed single-date
+    headers are rewritten; day precision is preserved (no fabricated 00:00) and dates
+    are never copied across semantics.
+    """
+    # --- Pass 1: plan ---
+    for title, info in parse_sections(text).items():
+        headers = list(info.get("headers") or [])
+        if not headers or headers[0] != "ID":
+            continue
+        section = section_for_title(title, locale)
+        if not section:
+            continue
+        if headers == list(section.columns):
+            continue
+        if is_supported_legacy_header(headers, section, locale):
+            continue
+        unmappable = is_unmappable_legacy_header(headers, section, locale)
+        if unmappable:
+            raise SystemExit(
+                T[locale.name]["migrate_unmappable"].format(title, unmappable)
+            )
+        # Also check against dev_extended shape when the section is the features slot
+        # that might carry an 8-col header under a non-dev title — rare; fall through.
+        raise SystemExit(
+            T[locale.name]["migrate_unknown_header"].format(title, len(headers))
+        )
+
     lines = text.splitlines()
     migrated: list[str] = []
     fixes: list[str] = []
@@ -1673,6 +1988,7 @@ def migrate_legacy_schema(text: str, locale: Locale) -> tuple[str, list[str], li
     current_title: str | None = None
     active_legacy_columns: tuple[str, ...] | None = None
     active_new_columns: tuple[str, ...] | None = None
+    active_semantic: str | None = None
     priority_col = locale.dev_extended.columns[3]
 
     for idx, line in enumerate(lines, 1):
@@ -1681,6 +1997,7 @@ def migrate_legacy_schema(text: str, locale: Locale) -> tuple[str, list[str], li
             current_title = heading.group(1)
             active_legacy_columns = None
             active_new_columns = None
+            active_semantic = None
             migrated.append(line)
             continue
 
@@ -1689,7 +2006,7 @@ def migrate_legacy_schema(text: str, locale: Locale) -> tuple[str, list[str], li
             migrated.append(line)
             continue
 
-        is_separator = all(set(cell) <= {"-", ":", " "} for cell in cells)
+        is_separator = _is_separator_row(cells)
         if is_separator and active_new_columns:
             migrated.append("| " + " | ".join(["---"] * len(active_new_columns)) + " |")
             continue
@@ -1700,23 +2017,23 @@ def migrate_legacy_schema(text: str, locale: Locale) -> tuple[str, list[str], li
             if cells == expected:
                 active_legacy_columns = None
                 active_new_columns = None
+                active_semantic = None
                 migrated.append(line)
             elif is_supported_legacy_header(cells, section, locale):
-                # Only a supported 6/8-col single-date legacy schema (incl. 发现日期 alias)
-                # may be migrated. Anything else — e.g. a reordered 7-col dual-date header —
-                # is NOT legacy: rewriting its header while leaving data rows untouched would
-                # shift every field's meaning (待办 read as the action, and so on). Refuse.
+                date_name = matches_single_date_header(cells, section, locale)
+                active_semantic = date_column_semantic(date_name or "", locale)
                 active_legacy_columns = tuple(cells)
                 active_new_columns = tuple(expected)
                 fixes.append(T[locale.name]["migrate_header"].format(current_title, len(expected)))
                 migrated.append(table_line(expected))
             else:
+                # Pass 1 should have caught this; keep as a hard fail for safety.
                 raise SystemExit(
                     T[locale.name]["migrate_unknown_header"].format(current_title, len(cells))
                 )
             continue
 
-        if not active_legacy_columns or not active_new_columns:
+        if not active_legacy_columns or not active_new_columns or not active_semantic:
             migrated.append(line)
             continue
 
@@ -1725,16 +2042,16 @@ def migrate_legacy_schema(text: str, locale: Locale) -> tuple[str, list[str], li
             continue
 
         if len(active_legacy_columns) == 6 and len(cells) == 6:
-            date_value = cells[3]
-            status = cells[4]
+            found, completed = map_legacy_date_to_dual(cells[3], active_semantic)
             migrated.append(
-                table_line([cells[0], cells[1], cells[2], legacy_time(date_value), legacy_completed_time(date_value, status, locale), status, cells[5]])
+                table_line(
+                    [cells[0], cells[1], cells[2], found, completed, cells[4], cells[5]]
+                )
             )
             continue
 
         if len(active_legacy_columns) == 8 and len(cells) == 8 and priority_col in active_legacy_columns:
-            date_value = cells[5]
-            status = cells[6]
+            found, completed = map_legacy_date_to_dual(cells[5], active_semantic)
             migrated.append(
                 table_line(
                     [
@@ -1743,9 +2060,9 @@ def migrate_legacy_schema(text: str, locale: Locale) -> tuple[str, list[str], li
                         cells[2],
                         cells[3],
                         cells[4],
-                        legacy_time(date_value),
-                        legacy_completed_time(date_value, status, locale),
-                        status,
+                        found,
+                        completed,
+                        cells[6],
                         cells[7],
                     ]
                 )
@@ -1757,7 +2074,11 @@ def migrate_legacy_schema(text: str, locale: Locale) -> tuple[str, list[str], li
         # can't safely remap cells we can't align to columns, so leave the row untouched
         # and WARN. Without this the header migrates, the row silently stays behind, and
         # "修复完成" reads as complete while check still flags the row as a column mismatch.
-        warnings.append(T[locale.name]["migrate_skip"].format(cells[0], idx, len(active_legacy_columns), len(cells)))
+        warnings.append(
+            T[locale.name]["migrate_skip"].format(
+                cells[0], idx, len(active_legacy_columns), len(cells)
+            )
+        )
         migrated.append(line)
 
     return "\n".join(migrated).rstrip() + "\n", fixes, warnings
@@ -1847,7 +2168,7 @@ def escape_unescaped_pipes(text: str, locale: Locale) -> tuple[str, list[str]]:
         if cells[0] == "ID":
             headers = cells
             continue
-        if all(set(cell) <= {"-", ":", " "} for cell in cells):
+        if _is_separator_row(cells):
             continue
         if not headers or len(cells) <= len(headers):
             continue
@@ -1910,11 +2231,21 @@ def check_text(text: str, locale: Locale, schema: str = "dual") -> list[str]:
     for title, info in sections.items():
         headers = list(info.get("headers") or [])
         expected = expected_map.get(title)
-        if expected and headers and headers != list(expected.columns):
-            # No special-case exemption for 开发事项/Development: under --schema single the
-            # expected header is the 8-col single-date shape, and a lingering 9-col dual
-            # header must be reported — the old "headers == dual 9-col" branch swallowed it.
-            issues.append(m["header_mismatch"].format(title))
+        if expected and headers:
+            expected_cols = list(expected.columns)
+            if schema == "single":
+                # Accept any SINGLE_DATE_ALIASES label in the date slot (BUG-026 / REQ-04/05).
+                compatible = (
+                    headers == expected_cols
+                    or _single_date_slot_name(headers, expected_cols, locale) is not None
+                )
+                if not compatible:
+                    issues.append(m["header_mismatch"].format(title))
+            elif headers != expected_cols:
+                # Dual mode: also accept a compatible single-date shape when the file was
+                # forced to dual incorrectly — but normally detect_schema already chose
+                # single. Keep strict dual equality here.
+                issues.append(m["header_mismatch"].format(title))
         for line_no, cells in info.get("rows", []):
             if not headers:
                 continue
@@ -1954,9 +2285,13 @@ def check_text(text: str, locale: Locale, schema: str = "dual") -> list[str]:
                     if named_indices:
                         time_indices = named_indices
                     elif schema == "dual":
-                        time_indices = [-3, -4]
+                        # BUG-033: the old branch used [-3, -4] (negative indices), but the
+                        # guard `0 <= tidx < len(cells)` is always False for negatives, so the
+                        # fallback was dead code and invalid times in non-standard-header
+                        # sections were silently missed. Convert to non-negative offsets.
+                        time_indices = [len(cells) - 4, len(cells) - 3]
                     else:
-                        time_indices = [-3]
+                        time_indices = [len(cells) - 3]
                     for tidx in time_indices:
                         if 0 <= tidx < len(cells) and not _is_valid_time(cells[tidx]):
                             issues.append(m["bad_time_line"].format(line_no + 1, cells[tidx]))
@@ -1988,6 +2323,13 @@ def check_text(text: str, locale: Locale, schema: str = "dual") -> list[str]:
                 # and summary reported "总计：0". Flag it explicitly so malformed IDs surface
                 # instead of hiding as un-validated rows.
                 issues.append(m["bad_id_line"].format(line_no + 1, cells[0]))
+            elif cells and not cells[0].strip() and any(c.strip() for c in cells[1:]):
+                # BUG-039: a data row whose ID cell is empty but which carries content in later
+                # columns slipped through every branch above (empty "" is not a valid ID and
+                # not _looks_like_id), so check passed and summary under-counted. A non-empty
+                # row with a blank ID column is almost certainly a malformed/missing-ID record
+                # and must be surfaced.
+                issues.append(m["bad_id_line"].format(line_no + 1, cells[0]))
 
     for item_id, locations in id_locations.items():
         if len(locations) > 1:
@@ -2002,7 +2344,7 @@ def check_text(text: str, locale: Locale, schema: str = "dual") -> list[str]:
 
 def command_check(args: argparse.Namespace) -> int:
     path = Path(args.file)
-    text = path.read_text(encoding="utf-8")
+    text = read_task_list(path)
     locale = get_locale(detect_locale(text))
     schema = args.schema if args.schema != "auto" else detect_schema(text, locale)
     issues = check_text(text, locale, schema)
@@ -2017,9 +2359,12 @@ def command_check(args: argparse.Namespace) -> int:
 def compute_summary_rows(text: str, locale: Locale) -> list[tuple[str, int, int, int]]:
     sections = parse_sections(text)
     records = collect_records(text)
-    records_by_section: defaultdict[str, list[list[str]]] = defaultdict(list)
+    headers_by_title = {
+        title: list(info.get("headers") or []) for title, info in sections.items()
+    }
+    records_by_section: defaultdict[str, list[tuple[list[str], list[str]]]] = defaultdict(list)
     for title, _, cells in records:
-        records_by_section[title].append(cells)
+        records_by_section[title].append((cells, headers_by_title.get(title, [])))
 
     rows: list[tuple[str, int, int, int]] = []
     for title in sections:
@@ -2030,8 +2375,21 @@ def compute_summary_rows(text: str, locale: Locale) -> list[tuple[str, int, int,
             continue
         section_records = records_by_section.get(title, [])
         total = len(section_records)
-        done = sum(1 for cells in section_records if len(cells) >= 2 and cells[-2] in locale.completed_statuses)
-        pending = sum(1 for cells in section_records if len(cells) >= 2 and cells[-2] in locale.pending_statuses)
+        # BUG-027/BUG-037: read status BY HEADER NAME, not cells[-2]. A notes cell with an
+        # unescaped pipe splits the row into extra cells, so cells[-2] lands on a notes
+        # fragment and the completed/pending counts (and rate) are silently wrong.
+        done = sum(
+            1
+            for cells, headers in section_records
+            if cell_at_field(cells, headers, "status", locale, fallback=-2)
+            in locale.completed_statuses
+        )
+        pending = sum(
+            1
+            for cells, headers in section_records
+            if cell_at_field(cells, headers, "status", locale, fallback=-2)
+            in locale.pending_statuses
+        )
         rows.append((title, total, done, pending))
     return rows
 
@@ -2083,7 +2441,7 @@ def update_summary_text(text: str, locale: Locale) -> str:
 
 def command_summary(args: argparse.Namespace) -> int:
     path = Path(args.file)
-    text = path.read_text(encoding="utf-8")
+    text = read_task_list(path)
     locale = get_locale(detect_locale(text))
 
     if args.write:
@@ -2096,8 +2454,15 @@ def command_summary(args: argparse.Namespace) -> int:
         return 0
 
     records = collect_records(text)
+    headers_by_title = section_headers_by_title(text)
     by_section = Counter(title for title, _, _ in records)
-    by_status = Counter(cells[-2] for _, _, cells in records if len(cells) >= 2)
+    # BUG-037: read status BY HEADER NAME. cells[-2] lands on a notes fragment when a notes
+    # cell holds an unescaped pipe, so the status distribution printed garbage status names.
+    by_status = Counter(
+        cell_at_field(cells, headers_by_title.get(title, []), "status", locale, fallback=-2)
+        for title, _, cells in records
+        if len(cells) >= 2
+    )
     m = T[locale.name]
     print(m["by_section"])
     for title, count in by_section.items():
@@ -2112,7 +2477,7 @@ def command_summary(args: argparse.Namespace) -> int:
 def command_standardize(args: argparse.Namespace) -> int:
     path = Path(args.file)
     project_root = path.resolve().parent
-    original_text = path.read_text(encoding="utf-8")
+    original_text = read_task_list(path)
     locale = get_locale(detect_locale(original_text))
     working_text = original_text
     applied_fixes: list[str] = []
@@ -2311,8 +2676,17 @@ def merge_archive_body(existing: str, archive_body: str) -> str:
 
 def command_archive(args: argparse.Namespace) -> int:
     path = Path(args.file)
-    text = path.read_text(encoding="utf-8")
+    text = read_task_list(path)
     locale = get_locale(detect_locale(text))
+    # BUG-035: --older-than-days had no range check. Values >999999999 crashed with an
+    # OverflowError stack trace; negative values silently archived ALL completed records
+    # because the cutoff landed in the future. Clamp to a sane positive range.
+    if args.older_than_days < 0:
+        raise SystemExit(T[locale.name]["archive_days_negative"].format(args.older_than_days))
+    if args.older_than_days > 365 * 100:
+        raise SystemExit(
+            T[locale.name]["archive_days_too_large"].format(args.older_than_days, 365 * 100)
+        )
     if args.as_of:
         try:
             as_of = datetime.strptime(args.as_of, "%Y-%m-%d")
@@ -2338,6 +2712,20 @@ def command_archive(args: argparse.Namespace) -> int:
     # reporting success. Refuse before writing anything.
     if archive_path.resolve() == path.resolve():
         raise SystemExit(T[locale.name]["archive_output_same"].format(archive_path))
+
+    # BUG-034: archiving records out of the main file can leave dangling [[ID]] references
+    # behind (a still-open record's notes cite an ID that just got archived). check would flag
+    # them only AFTER the write, so the user would not discover the breakage unless they ran
+    # check separately. Detect before writing and refuse so the references can be resolved.
+    remaining_ids = {cells[0] for _, _, cells in collect_records(main_text) if cells}
+    dangling: list[str] = []
+    for line_no, ref_id in _collect_wiki_refs(main_text):
+        if ref_id not in remaining_ids:
+            dangling.append(f"第 {line_no} 行 [[{ref_id}]]")
+    if dangling:
+        raise SystemExit(
+            T[locale.name]["archive_dangling_refs"].format("、".join(dangling[:10]))
+        )
 
     if args.dry_run:
         print(main_text, end="")

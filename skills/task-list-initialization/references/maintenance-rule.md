@@ -71,13 +71,18 @@ If this session completed no work, do nothing and say nothing. If a `Stop` hook 
       {
         "matcher": "",
         "hooks": [
-          { "type": "command", "command": "bash .claude/hooks/tasklist_sync_reminder.sh" }
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/.claude/hooks/tasklist_sync_reminder.sh\""
+          }
         ]
       }
     ]
   }
 }
 ```
+
+> **必须用 `${CLAUDE_PROJECT_DIR}`**，不要写 `bash .claude/hooks/...` 相对路径。Claude Code 的 hook cwd 可能是子目录（如 `runtime/`）或内部 helper 目录，相对路径会报 `No such file or directory`，看起来像「脚本缺失」。Must use `${CLAUDE_PROJECT_DIR}`; bare relative paths break when the hook cwd is not the repo root.
 
 脚本 `.claude/hooks/tasklist_sync_reminder.sh`（每会话首次停止注入 `block` 提醒，用 `session_id` 守卫防死循环；`reason` 文案按 task-list 语言二选一）· The script injects a one-shot `block` reminder per session, guarded by `session_id` to avoid loops; pick the `reason` text matching the task-list language:
 

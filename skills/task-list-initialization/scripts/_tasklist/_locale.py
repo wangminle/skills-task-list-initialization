@@ -217,10 +217,30 @@ LOCALES = {"zh": _ZH, "en": _EN}
 # 「表头与标准不一致」on every section. Migration to dual-date remains opt-in (--migrate-schema).
 DUAL_DATE_COLS = {"zh": ("发现时间", "完成时间"), "en": ("Found", "Done")}
 SINGLE_DATE_COL = {"zh": "完成日期", "en": "Done Date"}
+# All historical single-date column labels accepted by check/add as a compatible
+# single-date schema. Semantic (found/completed/started/planned) is resolved separately
+# for migration — only found/completed can migrate losslessly to dual-date.
 SINGLE_DATE_ALIASES = {
-    "zh": ("完成日期", "发现日期"),
-    "en": ("Done Date", "Found Date"),
+    "zh": ("完成日期", "发现日期", "开始日期", "规划日期"),
+    "en": ("Done Date", "Found Date", "Start Date", "Plan Date"),
 }
+# Maps a single-date column name → migration semantic (BUG-026 / REQ-01~03).
+DATE_COLUMN_SEMANTICS = {
+    "zh": {
+        "发现日期": "found",
+        "完成日期": "completed",
+        "开始日期": "started",
+        "规划日期": "planned",
+    },
+    "en": {
+        "Found Date": "found",
+        "Done Date": "completed",
+        "Start Date": "started",
+        "Plan Date": "planned",
+    },
+}
+MIGRATEABLE_DATE_SEMANTICS = frozenset({"found", "completed"})
+UNMAPPABLE_DATE_SEMANTICS = frozenset({"started", "planned"})
 
 
 # User-facing strings (CLI prompts, diagnostic report). Locale-driven so an English
@@ -265,7 +285,12 @@ T = {
         "archive_moved": "已归档 {0} 条记录 → {1}",
         "archive_none": "没有符合条件的已完成旧记录可归档",
         "archive_as_of_bad": "--as-of 格式应为 YYYY-MM-DD：{0}",
+        "archive_days_negative": "--older-than-days 不能为负数：{0}（负值会让截止日落到未来，静默归档全部已完成记录）。",
+        "archive_days_too_large": "--older-than-days 值过大：{0}（上限 {1} 天，约 100 年）。请使用合理的范围。",
         "archive_output_same": "归档输出路径与主文件相同：{0}。为避免记录丢失已拒绝归档，请为 --output 指定一个不同的文件。",
+        "archive_dangling_refs": "归档会使以下悬空引用产生（剩余记录引用了被归档的 ID）：{0}。请先解除引用或调整归档条件，再重试归档。",
+        "file_not_found": "文件不存在：{0}",
+        "file_not_readable": "无法读取文件 {0}：{1}",
         "dup_id": "重复 ID：{0} 出现在行 {1}",
         "bad_id_line": "第 {0} 行：ID 格式非法「{1}」，应为 大写前缀-三位数字（如 BUG-001）",
         "bad_id_on_add": "ID 格式非法：「{0}」，应为 大写前缀-三位数字（如 BUG-001）。",
@@ -290,6 +315,7 @@ T = {
         "migrate_skip": "⚠️ {0}（第 {1} 行）：实际 {3} 列、legacy 表头 {2} 列，已跳过未迁移——多为单元格内未转义的 |，需人工处理",
         "migrate_skips": "⚠️ {0} 行因列数与表头不符未迁移（多为单元格内未转义的 |，需人工处理）：",
         "migrate_unknown_header": "无法迁移：分区「{0}」表头（{1} 列）既不是标准双日期 schema，也不是受支持的 6/8 列单日期旧 schema。未做任何修改，请手工核对列顺序后再迁移。",
+        "migrate_unmappable": "无法无损迁移：分区「{0}」的日期列「{1}」语义无法映射到双日期模型（发现时间/完成时间）。未做任何修改；请手工决定映射后再迁移，或保持单日期 schema。",
         "check_ok": "检查通过：未发现非法 ID、重复 ID、重复章节、列数异常、枚举问题、悬空引用或摘要漂移",
         "section_not_found": "未找到分区：{0}",
         "section_not_found_with_list": "未找到分区：{0}。当前文件可用分区：{1}",
@@ -319,6 +345,7 @@ T = {
         "maint_rule_present": "会话结束同步规则已安装（跳过）→ {0}",
         "maint_installed_hook": "已安装 Stop hook → {0}",
         "maint_hook_present": "Stop hook 已安装（跳过）",
+        "maint_hook_upgraded": "已升级 Stop hook 命令为 CLAUDE_PROJECT_DIR 绝对项目根路径（旧相对路径会在 cwd≠仓库根时找不到脚本）",
         "maint_hook_skipped": "未安装 Stop hook（未传 --with-hook）",
         "settings_bad_json": "无法解析 {0}：JSON 无效（{1}）。已中止，未修改该文件；请先手工修复 JSON，或备份后移除该文件再重试。",
         "settings_bad_shape": "无法安装 Stop hook：{0} 结构无效（{1}）。已中止，未写入 hook 脚本；请将 hooks.Stop 修正为数组后重试。",
@@ -368,7 +395,12 @@ T = {
         "archive_moved": "Archived {0} record(s) → {1}",
         "archive_none": "No completed old records matched the archive criteria",
         "archive_as_of_bad": "--as-of must be YYYY-MM-DD: {0}",
+        "archive_days_negative": "--older-than-days must not be negative: {0} (a negative value puts the cutoff in the future and silently archives all completed records).",
+        "archive_days_too_large": "--older-than-days is too large: {0} (max {1} days, ~100 years). Use a reasonable range.",
         "archive_output_same": "Archive output path is the same as the main file: {0}. Refusing to archive to avoid losing records; pick a different --output.",
+        "archive_dangling_refs": "Archiving would create dangling references (remaining records cite archived IDs): {0}. Remove the references or adjust the archive criteria, then retry.",
+        "file_not_found": "File not found: {0}",
+        "file_not_readable": "Cannot read file {0}: {1}",
         "dup_id": "Duplicate ID: {0} at lines {1}",
         "bad_id_line": "Line {0}: invalid ID \"{1}\", expected uppercase prefix + digits (e.g. BUG-001)",
         "bad_id_on_add": "Invalid ID format: \"{0}\"; expected uppercase prefix + three digits (e.g. BUG-001).",
@@ -393,6 +425,7 @@ T = {
         "migrate_skip": "⚠️ {0} (line {1}): {3} cells vs {2}-col legacy header; skipped — likely an unescaped | in a cell; fix manually",
         "migrate_skips": "⚠️ {0} row(s) skipped due to column mismatch (likely an unescaped | in a cell; fix manually):",
         "migrate_unknown_header": "Cannot migrate: section \"{0}\" header ({1} cols) is neither the standard dual-date schema nor a supported 6/8-col single-date legacy schema. Nothing was modified; check the column order manually before migrating.",
+        "migrate_unmappable": "Cannot migrate losslessly: section \"{0}\" date column \"{1}\" cannot map onto the dual-date model (Found/Done). Nothing was modified; decide the mapping manually, or keep the single-date schema.",
         "check_ok": "Check passed: no invalid IDs, duplicate IDs, duplicate sections, column mismatches, enum issues, dangling references, or summary drift",
         "section_not_found": "Section not found: {0}",
         "section_not_found_with_list": "Section not found: {0}. Available sections: {1}",
@@ -422,6 +455,7 @@ T = {
         "maint_rule_present": "Session-end sync rule already installed (skip) → {0}",
         "maint_installed_hook": "Installed Stop hook → {0}",
         "maint_hook_present": "Stop hook already installed (skip)",
+        "maint_hook_upgraded": "Upgraded Stop hook command to CLAUDE_PROJECT_DIR project-root path (legacy relative path breaks when cwd ≠ repo root)",
         "maint_hook_skipped": "Stop hook not installed (pass --with-hook to add it)",
         "settings_bad_json": "Cannot parse {0}: invalid JSON ({1}). Aborted without modifying the file; fix the JSON manually, or back it up and remove it before retrying.",
         "settings_bad_shape": "Cannot install Stop hook: {0} has invalid shape ({1}). Aborted without writing the hook script; fix hooks.Stop to be an array and retry.",
