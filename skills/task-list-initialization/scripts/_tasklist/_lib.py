@@ -6,11 +6,27 @@ import json
 import re
 import sys
 from collections import Counter, defaultdict
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from ._locale import *  # noqa: F403
+from ._locale import (
+    DATE_COLUMN_SEMANTICS,
+    DUAL_DATE_COLS,
+    LOCALES,
+    MAINTENANCE_RULE_MARKER,
+    MAINTENANCE_RULE_MARKER_EN,
+    MIGRATEABLE_DATE_SEMANTICS,
+    SINGLE_DATE_ALIASES,
+    SINGLE_DATE_COL,
+    STATUS_SUGGESTIONS,
+    TASKLIST_HOOK_MARKER,
+    T,
+    UNMAPPABLE_DATE_SEMANTICS,
+    Locale,
+    Section,
+    WIKI_ID_REF_RE,
+)
+from .repository import atomic_write, commit_all
 
 def text_claims_stop_hook(text: str) -> bool:
     """True when agent docs claim a Stop-hook / settings.json guarantee layer exists.
@@ -505,7 +521,7 @@ def write_with_optional_check(
     if dry_run:
         print(new_text, end="")
         return 0
-    path.write_text(new_text, encoding="utf-8")
+    atomic_write(path, new_text)
     if no_check:
         return 0
     schema = detect_schema(new_text, locale)
@@ -513,7 +529,7 @@ def write_with_optional_check(
     if skip_summary_drift:
         issues = [i for i in issues if "摘要" not in i and "Summary stale" not in i]
     if issues:
-        path.write_text(original_text, encoding="utf-8")
+        atomic_write(path, original_text)
         print(T[locale.name]["check_failed_rollback"], file=sys.stderr)
         for issue in issues:
             print(issue, file=sys.stderr)
@@ -536,41 +552,106 @@ def maybe_sync_summary(text: str, locale: Locale, enabled: bool) -> tuple[str, b
     return update_summary_text(text, locale), True
 
 
-def parse_summary_totals(text: str, locale: Locale) -> dict[str, int]:
-    """Read category → 总数 from the summary table (if present)."""
+def parse_summary_fields(text: str, locale: Locale) -> dict[str, dict[str, object]]:
+    """Read category -> {total, done, pending, rate} from the summary table (if present).
+
+    The summary table has 5 columns: 分类, 总数, 已完成, 待开发/待修复, 完成率.
+    total/done/pending are ints; rate is a float (percent, may be None when unparsable).
+    """
     sections = parse_sections(text)
     info = sections.get(locale.summary_section)
     if not info:
         return {}
-    result: dict[str, int] = {}
+    result: dict[str, dict[str, object]] = {}
     for _, cells in info.get("rows", []):
-        if len(cells) < 2:
+        if len(cells) < 4:
             continue
         name = cells[0].replace("**", "").strip()
-        try:
-            result[name] = int(str(cells[1]).replace(",", "").strip())
-        except ValueError:
-            continue
+        entry: dict[str, object] = {}
+        for i, key in enumerate(("total", "done", "pending")):
+            raw = str(cells[i + 1]).replace(",", "").strip()
+            try:
+                entry[key] = int(raw)
+            except ValueError:
+                continue
+        # 5th column: completion rate. Store as float percent (e.g. "99.6%" → 99.6).
+        if len(cells) >= 5:
+            rate_raw = str(cells[4]).replace(",", "").strip().rstrip("%")
+            try:
+                entry["rate"] = float(rate_raw)
+            except ValueError:
+                pass
+        if entry:
+            result[name] = entry
     return result
 
 
 def summary_drift_issues(text: str, locale: Locale) -> list[str]:
-    """Compare summary-table totals with actual record counts."""
+    """Compare summary-table total/done/pending/rate with actual record counts.
+
+    Also checks internal consistency: done + pending must equal total for each row, and
+    the written completion rate must match a recomputation within rounding tolerance.
+    """
     if not has_summary_section(text, locale):
         return []
-    written = parse_summary_totals(text, locale)
+    written = parse_summary_fields(text, locale)
     if not written:
         return []
     actual_rows = compute_summary_rows(text, locale)
-    actual_map = {title: total for title, total, _, _ in actual_rows}
-    actual_total = sum(actual_map.values())
+    actual_map = {title: (total, done, pending) for title, total, done, pending in actual_rows}
+    actual_total = sum(t for t, _, _ in actual_map.values())
+    actual_done = sum(d for _, d, _ in actual_map.values())
+    actual_pending = sum(p for _, _, p in actual_map.values())
     m = T[locale.name]
+    # Tolerance for completion-rate comparison. The rate column is rendered at 1-decimal
+    # precision, so a recomputed raw value (e.g. 99.63) rounds to 99.6; allow ±0.15 to
+    # absorb that without false positives, while still catching hard errors like a
+    # stale "100%" that should be 99.6.
+    RATE_TOLERANCE = 0.15
     issues: list[str] = []
-    for title, total in actual_map.items():
-        if title in written and written[title] != total:
-            issues.append(m["summary_stale"].format(title, written[title], total))
-    if locale.total_label in written and written[locale.total_label] != actual_total:
-        issues.append(m["summary_stale_total"].format(written[locale.total_label], actual_total))
+    for title, (total, done, pending) in actual_map.items():
+        if title not in written:
+            continue
+        w = written[title]
+        if w.get("total") != total:
+            issues.append(m["summary_stale"].format(title, w.get("total"), total))
+        if w.get("done") != done:
+            issues.append(m["summary_stale_done"].format(title, w.get("done"), done))
+        if w.get("pending") != pending:
+            issues.append(m["summary_stale_pending"].format(title, w.get("pending"), pending))
+        # Internal consistency: done + pending should equal total
+        wt, wd, wp = w.get("total"), w.get("done"), w.get("pending")
+        if isinstance(wt, int) and isinstance(wd, int) and isinstance(wp, int):
+            if wd + wp != wt:
+                issues.append(m["summary_inconsistent"].format(title, wd, wp, wt))
+            # Completion-rate drift: the written rate must match a fresh recomputation.
+            wr = w.get("rate")
+            if isinstance(wr, float) and isinstance(wt, int) and isinstance(wd, int):
+                expected = _compute_rate(wd, wt)
+                if abs(wr - expected) > RATE_TOLERANCE:
+                    issues.append(
+                        m["summary_stale_rate"].format(title, wr, _format_rate(wd, wt))
+                    )
+    # Total row
+    if locale.total_label in written:
+        w = written[locale.total_label]
+        if w.get("total") != actual_total:
+            issues.append(m["summary_stale_total"].format(w.get("total"), actual_total))
+        if w.get("done") != actual_done:
+            issues.append(m["summary_stale_done"].format(locale.total_label, w.get("done"), actual_done))
+        if w.get("pending") != actual_pending:
+            issues.append(m["summary_stale_pending"].format(locale.total_label, w.get("pending"), actual_pending))
+        wt, wd, wp = w.get("total"), w.get("done"), w.get("pending")
+        if isinstance(wt, int) and isinstance(wd, int) and isinstance(wp, int):
+            if wd + wp != wt:
+                issues.append(m["summary_inconsistent"].format(locale.total_label, wd, wp, wt))
+            wr = w.get("rate")
+            if isinstance(wr, float):
+                expected = _compute_rate(wd, wt)
+                if abs(wr - expected) > RATE_TOLERANCE:
+                    issues.append(
+                        m["summary_stale_rate"].format(locale.total_label, wr, _format_rate(wd, wt))
+                    )
     return issues
 
 
@@ -879,7 +960,7 @@ def command_init(args: argparse.Namespace) -> int:
         print(T[locale.name]["target_exists"].format(output), file=sys.stderr)
         return 2
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(text, encoding="utf-8")
+    atomic_write(output, text)
     print(T[locale.name]["generated_file"].format(output))
     return 0
 
@@ -1490,6 +1571,11 @@ def command_install_maintenance(args: argparse.Namespace) -> int:
         ),
         None,
     )
+    # Collect every (path, text) the command intends to write, then commit them as one
+    # atomic transaction (REQ-13). If any write fails, already-written files roll back
+    # to their pre-install bytes — no half-installed rule/hook/settings state.
+    plans: list[tuple[Path, str]] = []
+    hook_script_needs_chmod = False
     if holder is not None:
         print(m["maint_rule_present"].format(holder.name))
         rule_file_name = holder.name
@@ -1498,11 +1584,13 @@ def command_install_maintenance(args: argparse.Namespace) -> int:
         block = MAINTENANCE_RULE_ZH if lang == "zh" else MAINTENANCE_RULE_EN
         new_content = (existing.rstrip() + "\n\n" + block).lstrip() + "\n"
         if not args.dry_run:
-            target.write_text(new_content, encoding="utf-8")
+            plans.append((target, new_content))
         print(m["maint_installed_rule"].format(target.name))
         rule_file_name = target.name
 
     if not args.with_hook:
+        if not args.dry_run and plans:
+            commit_all(plans)
         print(m["maint_hook_skipped"])
         return 0
 
@@ -1518,16 +1606,17 @@ def command_install_maintenance(args: argparse.Namespace) -> int:
         stop_list = settings["hooks"]["Stop"]
         upgraded = _upgrade_tasklist_hook_commands(stop_list)
         script = HOOK_SCRIPT_ZH if lang == "zh" else HOOK_SCRIPT_EN
-        hook_script.parent.mkdir(parents=True, exist_ok=True)
         desired = script.replace("CLAUDE.md", rule_file_name)
         if (not hook_script.exists()) or hook_script.read_text(encoding="utf-8") != desired:
-            hook_script.write_text(desired, encoding="utf-8")
-            hook_script.chmod(hook_script.stat().st_mode | 0o111)
+            plans.append((hook_script, desired))
+            hook_script_needs_chmod = True
         if upgraded:
-            settings_path.parent.mkdir(parents=True, exist_ok=True)
-            settings_path.write_text(
-                json.dumps(settings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-            )
+            plans.append((settings_path, json.dumps(settings, ensure_ascii=False, indent=2) + "\n"))
+        if plans:
+            commit_all(plans)
+            if hook_script_needs_chmod:
+                hook_script.chmod(hook_script.stat().st_mode | 0o111)
+        if upgraded:
             print(m["maint_hook_upgraded"])
         else:
             print(m["maint_hook_present"])
@@ -1537,16 +1626,15 @@ def command_install_maintenance(args: argparse.Namespace) -> int:
         print(m["maint_installed_hook"].format(str(hook_script.relative_to(project_root))))
         return 0
 
-    # Parse and shape-check settings.json BEFORE writing the hook script, so a malformed
+    # Parse and shape-check settings.json BEFORE building the write plans, so a malformed
     # but parseable file (hooks:null / Stop as dict) aborts cleanly with no half-install.
     settings = _load_settings_for_hooks(settings_path, m)
     stop_list = settings["hooks"]["Stop"]
 
     # The reminder text must name the agent file that actually holds the rule.
     script = HOOK_SCRIPT_ZH if lang == "zh" else HOOK_SCRIPT_EN
-    hook_script.parent.mkdir(parents=True, exist_ok=True)
-    hook_script.write_text(script.replace("CLAUDE.md", rule_file_name), encoding="utf-8")
-    hook_script.chmod(hook_script.stat().st_mode | 0o111)
+    plans.append((hook_script, script.replace("CLAUDE.md", rule_file_name)))
+    hook_script_needs_chmod = True
 
     entry = {
         "matcher": "",
@@ -1572,8 +1660,11 @@ def command_install_maintenance(args: argparse.Namespace) -> int:
         stop_list.append(entry)
     else:
         _upgrade_tasklist_hook_commands(stop_list)
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    plans.append((settings_path, json.dumps(settings, ensure_ascii=False, indent=2) + "\n"))
+
+    commit_all(plans)
+    if hook_script_needs_chmod:
+        hook_script.chmod(hook_script.stat().st_mode | 0o111)
     print(m["maint_installed_hook"].format(".claude/hooks/tasklist_sync_reminder.sh"))
     return 0
 
@@ -1700,7 +1791,15 @@ def record_quality_warnings(
     sparse_notes = 0
     completed_without_time = 0
     active_without_completed_dash = 0
+    time_reverse_count = 0
     headers_by_title = headers_by_title or {}
+
+    # Track IDs per section for sequence-regression detection
+    section_ids: dict[str, list[str]] = {}
+    # Track full cell tuples for exact-duplicate detection (exclude line number)
+    seen_rows: dict[tuple[str, ...], str] = {}
+    duplicate_count = 0
+
     for title, _, cells in records:
         if len(cells) < 6:
             continue
@@ -1710,12 +1809,36 @@ def record_quality_warnings(
         status = cell_at_field(cells, headers, "status", locale, fallback=-2)
         notes = cell_at_field(cells, headers, "notes", locale, fallback=-1)
         completed_time = cell_at_field(cells, headers, "completed_time", locale, fallback=-3)
+        found_time = cell_at_field(cells, headers, "found_time", locale, fallback=-4)
         if notes in {"", "-"}:
             sparse_notes += 1
         if status in locale.completed_statuses and completed_time == "-":
             completed_without_time += 1
         if status in locale.pending_statuses and completed_time != "-":
             active_without_completed_dash += 1
+        # Detect completed time earlier than found time
+        if (
+            completed_time and completed_time != "-"
+            and found_time and found_time != "-"
+        ):
+            try:
+                ft = datetime.strptime(found_time, "%Y-%m-%d %H:%M")
+                ct = datetime.strptime(completed_time, "%Y-%m-%d %H:%M")
+                if ct < ft:
+                    time_reverse_count += 1
+            except ValueError:
+                pass
+        # Collect IDs per section for sequence check
+        if cells and re.match(r"^[A-Z]+-\d{3,}$", cells[0]):
+            section_ids.setdefault(title, []).append(cells[0])
+        # Exact duplicate detection: same cells EXCLUDING the ID column
+        # (different IDs with identical description/time/notes/备注 are duplicates)
+        row_key = tuple(cells[1:]) if len(cells) > 1 else tuple(cells)
+        if row_key in seen_rows:
+            duplicate_count += 1
+        else:
+            seen_rows[row_key] = title
+
     m = T[locale.name]
     if sparse_notes:
         warnings.append(m["warn_sparse_notes"].format(sparse_notes))
@@ -1723,6 +1846,18 @@ def record_quality_warnings(
         warnings.append(m["warn_completed_no_time"].format(completed_without_time))
     if active_without_completed_dash:
         warnings.append(m["warn_active_has_time"].format(active_without_completed_dash))
+    if time_reverse_count:
+        warnings.append(m["warn_time_reverse"].format(time_reverse_count))
+    # ID sequence regression: flag when IDs within a section go backwards
+    for title, ids in section_ids.items():
+        for i in range(1, len(ids)):
+            prev_num = int(ids[i - 1].split("-")[1])
+            curr_num = int(ids[i].split("-")[1])
+            if curr_num < prev_num:
+                warnings.append(m["warn_id_not_ascending"].format(title, ids[i - 1], ids[i]))
+                break  # one warning per section is enough
+    if duplicate_count:
+        warnings.append(m["warn_duplicate_records"].format(duplicate_count))
     return warnings
 
 
@@ -1743,8 +1878,17 @@ def classify_extension_recommendations(
             recommendations.append(m["rec_legacy_research"])
         if "文档事项" in headings:
             recommendations.append(m["rec_legacy_doc"])
-    if any(
-        len(cells) > 1 and cells[1] == locale.action_optimize for _, _, cells in records
+    # Optimize-section suggestion: require >= 5 optimize records AND > 5% of total
+    # to avoid false positives on projects with a single optimization entry.
+    optimize_count = sum(
+        1 for _, _, cells in records
+        if len(cells) > 1 and cells[1] == locale.action_optimize
+    )
+    total_count = len(records)
+    if (
+        optimize_count >= 5
+        and total_count > 0
+        and optimize_count / total_count > 0.05
     ) and locale.opt.title not in headings:
         recommendations.append(m["rec_opt_without_section"])
     if any(
@@ -1869,36 +2013,83 @@ def render_maintenance_lines(status: dict[str, object], locale: Locale) -> list[
     agent_file = status.get("agent_file")
     rule = bool(status.get("rule_installed"))
     hook = bool(status.get("hook_installed"))
+    claude_broken = status.get("claude_hook_broken")
+    codex_hook = bool(status.get("codex_hook_installed"))
+    codex_broken = status.get("codex_hook_broken")
     claim_mismatch = bool(status.get("claim_mismatch"))
     lines = [
         f"- {m['agent_file']}{sep}{agent_file or m['agent_file_none']}",
         f"- {m['rule_label']}{sep}{m['installed'] if rule else m['not_detected']}",
         f"- {m['hook_label']}{sep}{m['installed'] if hook else m['hook_optional']}",
+        f"- {m['codex_hook_label']}{sep}{m['installed'] if codex_hook else m['hook_optional']}",
     ]
+    if claude_broken:
+        lines.append(f"- ⚠️ Claude hook: {m['codex_hook_broken'].format(claude_broken)}")
+    if codex_broken:
+        lines.append(f"- ⚠️ {m['codex_hook_label']}: {m['codex_hook_broken'].format(codex_broken)}")
     if claim_mismatch:
         lines.append(m["rec_claim_mismatch"])
     elif not rule:
         lines.append(m["rec_install_rule"])
-    elif not hook:
+    elif not hook and not codex_hook:
         lines.append(m["rec_install_hook"])
     return lines
 
 
-def detect_maintenance_rule(project_root: Path) -> dict[str, object]:
-    """Detect whether the session-end task-list sync rule and Stop hook are installed.
+def _extract_hook_script_path(command: str) -> str | None:
+    """Extract the script path from a hook command like bash 'path' or bash "path"."""
+    # Match quoted paths containing tasklist_sync_reminder.sh
+    match = re.search(r"""['"]([^'"]*tasklist[^'"]*)['"]""", command)
+    if match:
+        return match.group(1)
+    # Unquoted: take everything after bash
+    match = re.match(r"\s*bash\s+(.+)", command.strip())
+    if match:
+        return match.group(1).strip()
+    return None
 
-    Read-only: scans the project root (parent of the target task-list.md) for the canonical
-    rule heading in CLAUDE.md / AGENTS.md and a tasklist Stop hook in .claude/settings.json.
-    Also flags claim-vs-actual mismatches: docs that assert a Stop-hook guarantee while no
-    matching hook exists. standardize surfaces this so the agent can offer to install the
-    maintenance rule when it is missing — it never writes these files itself (installation
-    follows maintenance-rule.md).
+
+def _detect_hook_in_json(data: dict, project_root: Path) -> tuple[bool, str | None]:
+    """Check for a tasklist Stop hook in a parsed JSON hooks config.
+
+    Returns (found, broken_path). broken_path is set when the command references
+    a script path that does not exist on the filesystem.
     """
-    # Scan BOTH agent files rather than stopping at the first one that exists. The rule may
-    # legitimately live in AGENTS.md even when CLAUDE.md is also present (e.g. installed before
-    # CLAUDE.md existed); checking only the first existing file would misreport it as missing
-    # and prompt a duplicate install. Prefer CLAUDE.md both when picking the file that holds
-    # the marker and when choosing the install target if neither has it yet.
+    found = False
+    broken_path = None
+    for entry in data.get("hooks", {}).get("Stop", []):
+        if not isinstance(entry, dict):
+            continue
+        for hook in entry.get("hooks", []) or []:
+            if not isinstance(hook, dict):
+                continue
+            cmd = str(hook.get("command", ""))
+            if TASKLIST_HOOK_MARKER not in cmd:
+                continue
+            found = True
+            # Validate the script path exists
+            script_path = _extract_hook_script_path(cmd)
+            if script_path:
+                # Resolve ${CLAUDE_PROJECT_DIR} to project root
+                resolved = script_path.replace("${CLAUDE_PROJECT_DIR}", str(project_root))
+                if not Path(resolved).exists():
+                    broken_path = script_path
+            break
+        if found:
+            break
+    return found, broken_path
+
+
+def detect_maintenance_rule(project_root: Path) -> dict[str, object]:
+    """Detect whether the session-end task-list sync rule and Stop hooks are installed.
+
+    Read-only: scans the project root for the canonical rule heading in CLAUDE.md /
+    AGENTS.md, a tasklist Stop hook in .claude/settings.json (Claude Code), and
+    .codex/hooks.json (Codex). Also validates that hook commands point to scripts
+    that actually exist. Flags claim-vs-actual mismatches: docs that assert a
+    Stop-hook guarantee while no matching hook exists.
+    """
+    # Scan BOTH agent files rather than stopping at the first one that exists.
     candidates = ("CLAUDE.md", "AGENTS.md")
     existing = [name for name in candidates if (project_root / name).exists()]
     containing: list[str] = []
@@ -1922,28 +2113,39 @@ def detect_maintenance_rule(project_root: Path) -> dict[str, object]:
         agent_file = None
         rule_installed = False
 
+    # Claude Code hook: .claude/settings.json
     hook_installed = False
+    claude_hook_broken: str | None = None
     settings_path = project_root / ".claude" / "settings.json"
     if settings_path.exists():
         try:
             data = json.loads(settings_path.read_text(encoding="utf-8"))
-            for entry in data.get("hooks", {}).get("Stop", []):
-                for hook in entry.get("hooks", []):
-                    if TASKLIST_HOOK_MARKER in str(hook.get("command", "")):
-                        hook_installed = True
-                        break
-                if hook_installed:
-                    break
+            hook_installed, claude_hook_broken = _detect_hook_in_json(data, project_root)
         except (json.JSONDecodeError, OSError, AttributeError):
             hook_installed = False
 
+    # Codex hook: .codex/hooks.json
+    codex_hook_installed = False
+    codex_hook_broken: str | None = None
+    codex_path = project_root / ".codex" / "hooks.json"
+    if codex_path.exists():
+        try:
+            data = json.loads(codex_path.read_text(encoding="utf-8"))
+            codex_hook_installed, codex_hook_broken = _detect_hook_in_json(data, project_root)
+        except (json.JSONDecodeError, OSError, AttributeError):
+            codex_hook_installed = False
+
     hook_claimed = any(text_claims_stop_hook(text) for text in agent_texts)
-    claim_mismatch = hook_claimed and not hook_installed
+    any_hook = hook_installed or codex_hook_installed
+    claim_mismatch = hook_claimed and not any_hook
 
     return {
         "agent_file": agent_file,
         "rule_installed": rule_installed,
         "hook_installed": hook_installed,
+        "claude_hook_broken": claude_hook_broken,
+        "codex_hook_installed": codex_hook_installed,
+        "codex_hook_broken": codex_hook_broken,
         "hook_claimed": hook_claimed,
         "claim_mismatch": claim_mismatch,
     }
@@ -2394,10 +2596,33 @@ def compute_summary_rows(text: str, locale: Locale) -> list[tuple[str, int, int,
     return rows
 
 
-def render_summary_with_counts(rows: list[tuple[str, int, int, int]], locale: Locale) -> str:
-    def rate(done: int, total: int) -> str:
-        return f"{round(done / total * 100)}%" if total else "0%"
+def _compute_rate(done: int, total: int) -> float:
+    """Numeric completion rate in percent, single source of truth for both render and drift.
 
+    0 when no records; 100.0 when fully done; otherwise round(done/total*100, 1). When
+    items remain pending, the rounding can still land on 100.0 (e.g. 999/1000 → 99.9,
+    but 999/1001 → 99.8); a hard cap to 99.9 keeps "100%" exclusive to truly-complete
+    sections so it never reads as "all done" while work is still open.
+    """
+    if not total:
+        return 0.0
+    if done >= total:
+        return 100.0
+    r = round(done / total * 100, 1)
+    if r >= 100:
+        return 99.9
+    return r
+
+
+def _format_rate(done: int, total: int) -> str:
+    """Render the rate cell as it appears in the summary table."""
+    r = _compute_rate(done, total)
+    if r == int(r):
+        return f"{int(r)}%"
+    return f"{r}%"
+
+
+def render_summary_with_counts(rows: list[tuple[str, int, int, int]], locale: Locale) -> str:
     cols = list(locale.summary_columns)
     lines = [
         f"## {locale.summary_section}",
@@ -2407,11 +2632,11 @@ def render_summary_with_counts(rows: list[tuple[str, int, int, int]], locale: Lo
     ]
     total_all = done_all = pending_all = 0
     for title, total, done, pending in rows:
-        lines.append(f"| {title} | {total} | {done} | {pending} | {rate(done, total)} |")
+        lines.append(f"| {title} | {total} | {done} | {pending} | {_format_rate(done, total)} |")
         total_all += total
         done_all += done
         pending_all += pending
-    lines.append(f"| **{locale.total_label}** | {total_all} | {done_all} | {pending_all} | {rate(done_all, total_all)} |")
+    lines.append(f"| **{locale.total_label}** | {total_all} | {done_all} | {pending_all} | {_format_rate(done_all, total_all)} |")
     return "\n".join(lines)
 
 
@@ -2449,7 +2674,7 @@ def command_summary(args: argparse.Namespace) -> int:
         if args.dry_run:
             print(new_text, end="")
             return 0
-        path.write_text(new_text, encoding="utf-8")
+        atomic_write(path, new_text)
         print(T[locale.name]["summary_updated"].format(path))
         return 0
 
@@ -2507,7 +2732,7 @@ def command_standardize(args: argparse.Namespace) -> int:
             print(working_text, end="")
             printed_preview = True
         else:
-            path.write_text(working_text, encoding="utf-8")
+            atomic_write(path, working_text)
     status_stream = sys.stderr if printed_preview else sys.stdout
 
     report = analyze_standardization(working_text, args.profile, str(path), project_root, locale, schema_override=args.schema)
@@ -2519,7 +2744,7 @@ def command_standardize(args: argparse.Namespace) -> int:
     if args.report:
         report_path = Path(args.report)
         report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(rendered, encoding="utf-8")
+        atomic_write(report_path, rendered)
         print(T[locale.name]["report_written"].format(report_path), file=status_stream)
 
     if args.fix_only:
@@ -2733,18 +2958,21 @@ def command_archive(args: argparse.Namespace) -> int:
         print(archive_body, end="", file=sys.stderr)
         return 0
 
-    # Append to existing archive file when present (same month re-runs), merging rows
-    # into already-existing sections instead of adding duplicate section blocks.
+    # Build the full archive content up front: append-merge into an existing same-month
+    # archive, or use the new body verbatim. Both the archive file and the main file are
+    # then committed as one transaction (REQ-13): if either write fails, both roll back
+    # to their pre-archive bytes — records are never left half-moved (dropped from the
+    # main file but missing from the archive).
     if archive_path.exists():
         existing = archive_path.read_text(encoding="utf-8")
-        archive_path.write_text(merge_archive_body(existing, archive_body), encoding="utf-8")
+        final_archive = merge_archive_body(existing, archive_body)
     else:
-        archive_path.parent.mkdir(parents=True, exist_ok=True)
-        archive_path.write_text(archive_body, encoding="utf-8")
+        final_archive = archive_body
 
     # Keep an existing 统计摘要 in step with the records left in the main file.
     main_text, synced = maybe_sync_summary(main_text, locale, True)
-    path.write_text(main_text, encoding="utf-8")
+
+    commit_all([(archive_path, final_archive), (path, main_text)])
     print(T[locale.name]["archive_moved"].format(moved, archive_path))
     if synced:
         print(T[locale.name]["summary_synced"])

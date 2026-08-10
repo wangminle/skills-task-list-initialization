@@ -13,6 +13,7 @@
 # ─── Editor / IDE ────────────────────────────────────────
 .vscode/
 .idea/
+.zcode/
 *.code-workspace
 # Vim / Emacs backup & swap files
 *.swo

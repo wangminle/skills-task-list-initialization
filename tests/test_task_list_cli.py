@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -2396,6 +2397,335 @@ class TaskListCliTest(unittest.TestCase):
             self.assertIn("开始日期", err)
             self.assertIn("无法映射", err)
             self.assertEqual(before, target.read_text(encoding="utf-8"))
+
+    # --- BUG-040: summary drift must check done/pending, not just total ---
+
+    def test_summary_drift_catches_done_mismatch(self):
+        """Changing only the done/pending counts (total stays same) must be caught."""
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            self.run_cli("add", "--file", str(target), "--section", "代码 Bug",
+                         "--action", "修复", "--description", "test",
+                         "--status", "已修复", "--found-time", "2026-01-01 10:00",
+                         "--completed-time", "2026-01-02 10:00", "--no-check")
+            self.run_cli("summary", "--file", str(target), "--write")
+            # Tamper: change done=1 -> done=0, pending=0 -> pending=1 (total stays 1)
+            text = target.read_text(encoding="utf-8")
+            text = text.replace("| 代码 Bug | 1 | 1 | 0 |", "| 代码 Bug | 1 | 0 | 1 |")
+            text = text.replace("| **总计** | **1** | **1** | **0** |",
+                                "| **总计** | **1** | **0** | **1** |")
+            target.write_text(text, encoding="utf-8")
+            result = self.run_cli("check", "--file", str(target), check=False)
+            self.assertNotEqual(result.returncode, 0)
+            out = result.stdout + result.stderr
+            self.assertIn("已完成", out)
+
+    # --- BUG-041: completion rate must not show 100% with pending items ---
+
+    def test_rate_precision_with_pending(self):
+        """1070/1074 should render as 99.6%, not 100%."""
+        mod = load_cli_module()
+        rows = [("test", 1074, 1070, 4)]
+        rendered = mod.render_summary_with_counts(rows, mod.get_locale("zh"))
+        rate_line = [l for l in rendered.splitlines() if "test" in l][0]
+        self.assertIn("99.6%", rate_line)
+        self.assertNotIn("100%", rate_line)
+
+    def test_rate_capped_at_99_9_when_rounding_up(self):
+        """9999/10000 must show 99.9%, never 100%."""
+        mod = load_cli_module()
+        rows = [("test", 10000, 9999, 1)]
+        rendered = mod.render_summary_with_counts(rows, mod.get_locale("zh"))
+        rate_line = [l for l in rendered.splitlines() if "test" in l][0]
+        self.assertIn("99.9%", rate_line)
+        self.assertNotIn("100%", rate_line)
+
+    # --- BUG-042: time reverse detection ---
+
+    def test_warn_time_reverse(self):
+        """Completed time earlier than found time should produce a quality warning."""
+        mod = load_cli_module()
+        text = (
+            "# 任务跟踪列表\n\n## 代码 Bug\n\n"
+            "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| BUG-001 | 修复 | reverse | 2026-08-10 10:00 | 2026-08-09 10:00 | 已修复 | ok |\n"
+        )
+        records = mod.collect_records(text)
+        headers = mod.section_headers_by_title(text)
+        warnings = mod.record_quality_warnings(records, mod.get_locale("zh"), headers)
+        self.assertTrue(any("完成时间早于发现时间" in w for w in warnings))
+
+    # --- BUG-043: ID sequence regression warning ---
+
+    def test_warn_id_not_ascending(self):
+        """IDs going backwards within a section should produce a warning."""
+        mod = load_cli_module()
+        text = (
+            "# 任务跟踪列表\n\n## 调整事项\n\n"
+            "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| ADJ-018 | 调整 | a | 2026-01-01 10:00 | - | 待办 | x |\n"
+            "| ADJ-014 | 调整 | b | 2026-01-02 10:00 | - | 待办 | y |\n"
+        )
+        records = mod.collect_records(text)
+        headers = mod.section_headers_by_title(text)
+        warnings = mod.record_quality_warnings(records, mod.get_locale("zh"), headers)
+        self.assertTrue(any("行序回退" in w and "ADJ-018" in w and "ADJ-014" in w for w in warnings))
+
+    # --- BUG-044: exact duplicate record detection ---
+
+    def test_warn_duplicate_records(self):
+        """Two records with identical cells (except ID) should be flagged."""
+        mod = load_cli_module()
+        text = (
+            "# 任务跟踪列表\n\n## 代码 Bug\n\n"
+            "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| BUG-001 | 修复 | dup | 2026-01-01 10:00 | 2026-01-02 10:00 | 已修复 | same |\n"
+            "| BUG-002 | 修复 | dup | 2026-01-01 10:00 | 2026-01-02 10:00 | 已修复 | same |\n"
+        )
+        records = mod.collect_records(text)
+        headers = mod.section_headers_by_title(text)
+        warnings = mod.record_quality_warnings(records, mod.get_locale("zh"), headers)
+        self.assertTrue(any("完全相同" in w for w in warnings))
+
+    # --- BUG-045: Codex hook detection ---
+
+    def test_detect_codex_hook_broken_path(self):
+        """Codex hook with non-existent script path should be flagged as broken."""
+        mod = load_cli_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            codex_dir = Path(tmp) / ".codex"
+            codex_dir.mkdir()
+            (codex_dir / "hooks.json").write_text(json.dumps({
+                "hooks": {
+                    "Stop": [{
+                        "hooks": [{
+                            "type": "command",
+                            "command": "bash '/nonexistent/path/tasklist_sync_reminder.sh'"
+                        }]
+                    }]
+                }
+            }), encoding="utf-8")
+            status = mod.detect_maintenance_rule(Path(tmp))
+            self.assertTrue(status.get("codex_hook_installed"))
+            self.assertIsNotNone(status.get("codex_hook_broken"))
+
+    def test_detect_codex_hook_valid_path(self):
+        """Codex hook with existing script path should not be flagged as broken."""
+        mod = load_cli_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            codex_dir = Path(tmp) / ".codex"
+            codex_dir.mkdir()
+            hooks_dir = codex_dir / "hooks"
+            hooks_dir.mkdir()
+            script = hooks_dir / "tasklist_sync_reminder.sh"
+            script.write_text("#!/bin/bash\n", encoding="utf-8")
+            (codex_dir / "hooks.json").write_text(json.dumps({
+                "hooks": {
+                    "Stop": [{
+                        "hooks": [{
+                            "type": "command",
+                            "command": f"bash '{script}'"
+                        }]
+                    }]
+                }
+            }), encoding="utf-8")
+            status = mod.detect_maintenance_rule(Path(tmp))
+            self.assertTrue(status.get("codex_hook_installed"))
+            self.assertIsNone(status.get("codex_hook_broken"))
+
+    # --- BUG-046: profile threshold for optimize suggestion ---
+
+    def test_optimize_threshold_single_record_no_suggestion(self):
+        """A single optimize record should NOT trigger extended-profile suggestion."""
+        mod = load_cli_module()
+        text = (
+            "# 任务跟踪列表\n\n## 代码 Bug\n\n"
+            "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| BUG-001 | 优化 | single | 2026-01-01 10:00 | - | 待办 | - |\n"
+            "| BUG-002 | 修复 | other | 2026-01-02 10:00 | - | 待办 | - |\n"
+            "| BUG-003 | 修复 | other | 2026-01-03 10:00 | - | 待办 | - |\n"
+            "| BUG-004 | 修复 | other | 2026-01-04 10:00 | - | 待办 | - |\n"
+        )
+        sections = mod.parse_sections(text)
+        records = mod.collect_records(text)
+        recs = mod.classify_extension_recommendations(
+            "minimal", "minimal", records, sections, mod.get_locale("zh")
+        )
+        opt_recs = [r for r in recs if "优化" in r and "分区" in r]
+        self.assertEqual(len(opt_recs), 0)
+
+    # --- Completion-rate field validation (summary drift catches wrong rate) ---
+
+    def test_summary_drift_catches_wrong_rate(self):
+        """A summary rate cell that contradicts the record counts must be flagged.
+
+        Reproduces the audit finding: an existing file with a hand-written 100% rate
+        that should be 99.6% (e.g. 1070/1074 done) was silently accepted because the
+        rate column was never compared — only total/done/pending were. Now the rate
+        field participates in the drift check.
+        """
+        mod = load_cli_module()
+        locale = mod.get_locale("zh")
+        # 1074 total, 1070 done, 4 pending. Correct rate = 99.6%.
+        # Build 1070 done records is impractical; instead test the comparator
+        # directly with a summary table whose rate is wrong relative to its own
+        # done/total (which is exactly the stored-file failure mode).
+        text = (
+            "# 任务跟踪列表\n\n"
+            "> 说明：test\n\n"
+            "## 代码 Bug\n\n"
+            "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| BUG-001 | 修复 | x | 2026-01-01 10:00 | - | 待修复 | - |\n"
+            "| BUG-002 | 修复 | y | 2026-01-02 10:00 | 2026-01-03 10:00 | 已修复 | - |\n"
+            "\n## 统计摘要\n\n"
+            "| 分类 | 总数 | 已完成 | 待开发/待修复 | 完成率 |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            # actual: total=2 done=1 pending=1 → correct rate 50%, written 100% (wrong)
+            "| 代码 Bug | 2 | 1 | 1 | 100% |\n"
+            "| **总计** | **2** | **1** | **1** | **100%** |\n"
+        )
+        issues = mod.summary_drift_issues(text, locale)
+        rate_issues = [i for i in issues if "完成率" in i or "rate" in i.lower()]
+        self.assertGreater(len(rate_issues), 0, f"expected rate drift, got {issues}")
+
+    def test_summary_drift_tolerates_rounding(self):
+        """A rate that matches within rounding tolerance must NOT be flagged.
+
+        1/3 → 33.333...% rounds to 33.3% at 1-decimal render precision. A stored 33.3%
+        is correct within tolerance, so it must not produce a false positive.
+        """
+        mod = load_cli_module()
+        locale = mod.get_locale("zh")
+        text = (
+            "# 任务跟踪列表\n\n"
+            "> 说明：test\n\n"
+            "## 代码 Bug\n\n"
+            "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| BUG-001 | 修复 | x | 2026-01-01 10:00 | 2026-01-02 10:00 | 已修复 | - |\n"
+            "| BUG-002 | 修复 | y | 2026-01-02 10:00 | - | 待修复 | - |\n"
+            "| BUG-003 | 修复 | z | 2026-01-03 10:00 | - | 待修复 | - |\n"
+            "\n## 统计摘要\n\n"
+            "| 分类 | 总数 | 已完成 | 待开发/待修复 | 完成率 |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            # actual: 1/3 = 33.333% → renders as 33.3%. Written 33.3% is within tolerance.
+            "| 代码 Bug | 3 | 1 | 2 | 33.3% |\n"
+            "| **总计** | **3** | **1** | **2** | **33.3%** |\n"
+        )
+        issues = mod.summary_drift_issues(text, locale)
+        rate_issues = [i for i in issues if "完成率" in i or "rate" in i.lower()]
+        self.assertEqual(rate_issues, [], f"should tolerate rounding, got {rate_issues}")
+
+    # --- Atomic writes (REQ-13): writes must be crash-safe and multi-file recoverable ---
+
+    def test_atomic_write_preserves_target_on_replace_failure(self):
+        """If os.replace fails mid-write, the target file must be byte-for-byte unchanged.
+
+        The old code path (path.write_text) truncated the file on failure. atomic_write
+        uses a temp + os.replace, so a failed rename leaves the original untouched.
+        """
+        mod = load_cli_module()
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            original = "# 任务跟踪列表\n\n原始内容\n"
+            target.write_text(original, encoding="utf-8")
+            original_bytes = target.read_bytes()
+
+            with mock.patch("os.replace", side_effect=OSError("disk full")):
+                with self.assertRaises(OSError):
+                    mod.atomic_write(target, "# completely different content\n")
+
+            self.assertEqual(target.read_bytes(), original_bytes)
+
+    def test_commit_all_restores_on_partial_failure(self):
+        """commit_all must roll back already-committed files when a later one fails.
+
+        Two files: the first writes fine, the second's os.replace fails. After the
+        exception, the first file must be restored to its pre-transaction content.
+        """
+        mod = load_cli_module()
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            f1 = Path(tmp) / "a.md"
+            f2 = Path(tmp) / "b.md"
+            f1.write_text("original-a\n", encoding="utf-8")
+            f2.write_text("original-b\n", encoding="utf-8")
+
+            # Fail os.replace only when the destination is f2, so the rollback's own
+            # os.replace (which targets f1 to restore it) still succeeds.
+            real_replace = os.replace
+
+            def flaky_replace(src, dst):
+                if Path(dst) == f2:
+                    raise OSError("simulated failure on second file")
+                return real_replace(src, dst)
+
+            with mock.patch("os.replace", side_effect=flaky_replace):
+                with self.assertRaises(OSError):
+                    mod.commit_all([
+                        (f1, "new-a\n"),
+                        (f2, "new-b\n"),
+                    ])
+
+            # f1 must have been restored to its original content, not left as "new-a".
+            self.assertEqual(f1.read_text(encoding="utf-8"), "original-a\n")
+
+    def test_archive_atomic_restores_on_failure(self):
+        """If the archive commit fails partway, the main file must keep all records.
+
+        Reproduces the original half-move risk: archive commits the archive file then the
+        main file as one transaction. If the main-file write fails, both roll back —
+        records are never left dropped from the main file without a complete archive.
+        We drive commit_all in-process (matching how command_archive commits) so the
+        injected os.replace fault actually takes effect.
+        """
+        mod = load_cli_module()
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            archive = Path(tmp) / "task-list-archive-202601.md"
+            original_main = (
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | old done | 2026-01-01 10:00 | 2026-01-02 10:00 | 已修复 | n |\n"
+                "| BUG-002 | 修复 | still open | 2026-01-01 10:00 | - | 待修复 | n |\n"
+            )
+            target.write_text(original_main, encoding="utf-8")
+
+            archive_body = "# 任务跟踪列表（归档）\n\n## 代码 Bug\n\n| BUG-001 | ... |\n"
+            main_after = original_main.replace("| BUG-001 | 修复 | old done | 2026-01-01 10:00 | 2026-01-02 10:00 | 已修复 | n |\n", "")
+
+            # Fail os.replace only when the destination is the main file, so the archive
+            # commit succeeds but the main-file commit fails — then the rollback
+            # restores the archive to absent and the main file retains BUG-001.
+            real_replace = os.replace
+
+            def flaky_replace(src, dst):
+                if Path(dst) == target:
+                    raise OSError("simulated main-file write failure")
+                return real_replace(src, dst)
+
+            with mock.patch("os.replace", side_effect=flaky_replace):
+                with self.assertRaises(OSError):
+                    mod.commit_all([(archive, archive_body), (target, main_after)])
+
+            main = target.read_text(encoding="utf-8")
+            # BUG-001 must still be in the main file (roll back restored it).
+            self.assertIn("BUG-001", main)
+            # Archive file must not exist (it was committed then rolled back to absent).
+            self.assertFalse(archive.exists())
 
 
 if __name__ == "__main__":

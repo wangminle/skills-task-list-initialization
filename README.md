@@ -1,13 +1,13 @@
 # Task List Initialization · 任务清单初始化
 
-**Version:** `V0.3.1`
+**Version:** `V0.3.2`
 
 **[English](#english)** | **[中文](#中文)**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-V0.3.1-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-V0.3.2-blue.svg)](VERSION)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-100%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-141%20passing-brightgreen.svg)](tests/)
 
 ---
 
@@ -33,7 +33,7 @@ Every project accumulates bugs, features, reviews, tests, docs, and ops work. Th
 - **Safe pipe escape** — `--apply-safe-fixes` can merge/escape unescaped `|` in overwide rows.
 - **Wiki cross-refs** — `[[BUG-001]]` syntax with dangling-reference detection in `check`.
 - **Archive** — `archive --older-than-days N` moves old completed rows to `task-list-archive-YYYYMM.md`.
-- **Tested** — 100 unit tests covering init, add, update, list, sections, from-json, notes-file, auto-check rollback, check, summary, standardize, archive, install-maintenance (including CLAUDE_PROJECT_DIR Stop-hook path + legacy relative-path upgrade), aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, maintenance-rule detection (including claim mismatch and cross-file idempotence), schema-variant detection, timestamp validation, invalid-ID detection, non-standard-header rejection, archive ID non-reuse, pipe escape, wiki refs, status suggestions, case-insensitive section resolution, and the English locale.
+- **Tested** — 130 unit tests covering init, add, update, list, sections, from-json, notes-file, auto-check rollback, check, summary, standardize, archive, install-maintenance (including CLAUDE_PROJECT_DIR Stop-hook path + legacy relative-path upgrade), aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, maintenance-rule detection (including claim mismatch and cross-file idempotence), schema-variant detection, timestamp validation, invalid-ID detection, non-standard-header rejection, archive ID non-reuse, pipe escape, wiki refs, status suggestions, case-insensitive section resolution, English locale, summary drift four-field comparison, rate precision cap, time-reverse detection, ID-order regression detection, duplicate-record detection, and Codex hook path validation.
 
 ### The Task List Standard
 
@@ -175,13 +175,13 @@ A project may legitimately keep a **compatible single-date schema** (`Done Date`
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-121 tests, all passing.
+130 tests, all passing.
 
 ### Project Structure
 
 ```
 skills-task-list-initialization/
-├── VERSION                                   # V0.3.1
+├── VERSION                                   # V0.3.2
 ├── skills/task-list-initialization/
 │   ├── SKILL.md                              # Skill definition
 │   ├── evals/
@@ -194,7 +194,7 @@ skills-task-list-initialization/
 │       ├── task_list_cli.py                  # CLI entry (re-exports)
 │       └── _tasklist/                        # Implementation package (_lib.py, _locale.py)
 ├── tests/
-│   └── test_task_list_cli.py                 # Unit tests (100)
+│   └── test_task_list_cli.py                 # Unit tests (130)
 ├── LICENSE                                   # MIT
 └── README.md
 ```
@@ -204,6 +204,15 @@ skills-task-list-initialization/
 [MIT](LICENSE) © 2026 fenix-wangminle.
 
 ### Changelog
+
+#### V0.3.2
+
+- Summary drift check expanded to four-field comparison (total / done / pending / internal consistency)
+- Completion rate precision fixed: 1 decimal place, capped at 99.9% when tasks remain (no false 100%)
+- Codex `.codex/hooks.json` Stop-hook detection with script-path existence validation
+- Quality warnings: time-reverse (done < found), ID-order regression within sections, exact duplicate records (excluding ID column)
+- Profile recommendation threshold tightened: optimize records must be ≥5 AND >5% of total
+- Version strings simplified (no build/date suffix); **130** unit tests
 
 #### V0.3.1
 
@@ -243,7 +252,7 @@ skills-task-list-initialization/
 - **自动转义 `|`**——`--apply-safe-fixes` 可合并并转义导致列数错乱的未转义 `|`。
 - **条目互引**——`[[BUG-001]]` 语法，`check` 检测悬空引用。
 - **归档**——`archive --older-than-days N` 将旧的已完成记录移到 `task-list-archive-YYYYMM.md`。
-- **经过测试**——100 个单元测试，覆盖 init、add、update、list、sections、from-json、notes-file、写后校验回滚、check、summary、standardize、archive、install-maintenance（含 `CLAUDE_PROJECT_DIR` Stop hook 路径与旧相对路径升级）、分区别名与反向别名、标题空白容错、`--fix-only` 语义、维护规则声明一致性与跨文件幂等、schema 变体检测、时间戳校验、非法 ID 检出、非标准表头拒绝、归档后 ID 不复用、管道符转义、互引检测、状态建议映射、分区大小写不敏感解析与英文 locale。
+- **经过测试**——130 个单元测试，覆盖 init、add、update、list、sections、from-json、notes-file、写后校验回滚、check、summary、standardize、archive、install-maintenance（含 `CLAUDE_PROJECT_DIR` Stop hook 路径与旧相对路径升级）、分区别名与反向别名、标题空白容错、`--fix-only` 语义、维护规则声明一致性与跨文件幂等、schema 变体检测、时间戳校验、非法 ID 检出、非标准表头拒绝、归档后 ID 不复用、管道符转义、互引检测、状态建议映射、分区大小写不敏感解析与英文 locale、摘要漂移四字段比较、完成率精度上限、时间倒置检测、ID 行序回退检测、重复记录检测与 Codex hook 路径校验。
 
 ### 任务清单标准
 
@@ -389,7 +398,7 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 
 ```
 skills-task-list-initialization/
-├── VERSION                                   # V0.3.1
+├── VERSION                                   # V0.3.2
 ├── skills/task-list-initialization/
 │   ├── SKILL.md                              # 技能定义
 │   ├── evals/
@@ -402,7 +411,7 @@ skills-task-list-initialization/
 │       ├── task_list_cli.py                  # CLI 入口（再导出）
 │       └── _tasklist/                        # 实现包（_lib.py、_locale.py）
 ├── tests/
-│   └── test_task_list_cli.py                 # 单元测试（100）
+│   └── test_task_list_cli.py                 # 单元测试（130）
 ├── LICENSE                                   # MIT
 └── README.md
 ```
@@ -412,6 +421,15 @@ skills-task-list-initialization/
 [MIT](LICENSE) © 2026 fenix-wangminle。
 
 ### 更新日志
+
+#### V0.3.2
+
+- 摘要漂移校验扩展为四字段比较（总数 / 已完成 / 待处理 / 内部一致性）
+- 完成率精度修复：1 位小数，有未完成时上限 99.9%（不再假报 100%）
+- Codex `.codex/hooks.json` Stop hook 检测，含脚本路径存在性校验
+- 质量告警：时间倒置（完成 < 发现）、分区内 ID 行序回退、精确重复记录（排除 ID 列）
+- 扩展配置文件建议阈值收紧：优化记录需 ≥5 条且 >总数 5%
+- 版本号简化（去除 build/日期后缀）；**130** 个单元测试
 
 #### V0.3.1
 

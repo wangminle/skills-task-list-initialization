@@ -1,14 +1,8 @@
 from __future__ import annotations
 
-import argparse
-import difflib
-import json
 import re
-import sys
-from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from pathlib import Path
+
 
 @dataclass(frozen=True)
 class Section:
@@ -268,6 +262,8 @@ T = {
         "hook_optional": "未检测到（可选）",
         "installed": "已安装",
         "not_detected": "未检测到",
+        "codex_hook_label": "Codex Stop hook",
+        "codex_hook_broken": "命令指向不存在的路径：{0}",
         "rec_install_rule": "- 建议：standardize 完成后询问用户是否安装「会话结束任务同步」规则（opt-in），模板见 references/maintenance-rule.md。",
         "rec_install_hook": "- 建议：规则已安装但未装 Stop hook；如需每次会话末强制触发可补装（可选）。",
         "rec_claim_mismatch": "- ⚠️ 声明与实际不一致：agent 文件声称由 Stop hook / settings.json 保证触发，但未检测到有效 Stop hook。请补装 hook，或改写声明为「未配置 hook 时由 agent 自觉执行」。",
@@ -300,6 +296,9 @@ T = {
         "warn_sparse_notes": "{0} 条记录备注为空或仅为 -，建议补充文件、测试、来源或后续风险。",
         "warn_completed_no_time": "{0} 条已完成/已修复记录缺少完成时间。",
         "warn_active_has_time": "{0} 条未完成记录已经填写完成时间，建议核对状态。",
+        "warn_time_reverse": "{0} 条记录完成时间早于发现时间，请核对。",
+        "warn_id_not_ascending": "分区「{0}」存在 ID 行序回退：{1} -> {2}",
+        "warn_duplicate_records": "检测到 {0} 组完全相同的记录（描述/时间/备注均一致），建议合并或关闭其中一条。",
         "rec_profile_higher": "当前内容更接近 {0}，高于指定 profile {1}，建议人工确认是否升级。",
         "rec_legacy_research": "发现「开源项目调研」分区，建议统一命名为「调研事项」并使用 RES- 前缀。",
         "rec_legacy_doc": "发现「文档事项」分区，建议统一命名为「文档维护」。",
@@ -325,6 +324,10 @@ T = {
         "bad_status_with_suggest": "状态不在建议枚举中：{0}（建议：{1}；允许：待修复、已修复、待办、待开发、进行中、已完成、已关闭、已解决）",
         "summary_stale": "摘要表过期：{0} 摘要总数={1} 实际={2}",
         "summary_stale_total": "摘要表过期：总计 摘要总数={0} 实际={1}",
+        "summary_stale_done": "摘要表过期：{0} 摘要已完成={1} 实际={2}",
+        "summary_stale_pending": "摘要表过期：{0} 摘要待处理={1} 实际={2}",
+        "summary_inconsistent": "摘要表内部不一致：{0} 已完成({1})+待处理({2})≠总数({3})",
+        "summary_stale_rate": "摘要表完成率漂移：{0} 摘要完成率={1}% 实际={2}",
         "summary_synced": "已同步统计摘要",
         "nonstandard_header": "分区「{0}」表头与标准 schema 不符（{1} 列），拒绝写入以免数据落入错误列。请手工核对列顺序后再 add；若确为受支持的 6/8 列单日期旧 schema，可运行 standardize --migrate-schema。",
         "bad_time": "时间格式应为 YYYY-MM-DD HH:MM：{0}",
@@ -378,6 +381,8 @@ T = {
         "hook_optional": "not detected (optional)",
         "installed": "installed",
         "not_detected": "not detected",
+        "codex_hook_label": "Codex Stop hook",
+        "codex_hook_broken": "command points to a non-existent path: {0}",
         "rec_install_rule": "- Suggestion: after standardize, ask the user whether to install the session-end sync rule (opt-in); see references/maintenance-rule.md.",
         "rec_install_hook": "- Suggestion: rule installed but no Stop hook; add one to force a reminder every session end (optional).",
         "rec_claim_mismatch": "- ⚠️ Claim vs actual mismatch: agent file claims a Stop hook / settings.json guarantee, but no valid Stop hook was found. Install the hook, or reword the claim to say the agent runs the sync when no hook is configured.",
@@ -410,6 +415,9 @@ T = {
         "warn_sparse_notes": "{0} records have empty or '-' notes; add files, tests, sources, or follow-up risks.",
         "warn_completed_no_time": "{0} completed/fixed records are missing a Done time.",
         "warn_active_has_time": "{0} incomplete records already have a Done time; check the status.",
+        "warn_time_reverse": "{0} records have Done time earlier than Found time; check.",
+        "warn_id_not_ascending": "Section \"{0}\" has ID order regression: {1} -> {2}",
+        "warn_duplicate_records": "{0} set(s) of exact duplicate records detected (same description/time/notes); merge or close one.",
         "rec_profile_higher": "Content looks closer to {0}, above the chosen profile {1}; confirm whether to upgrade.",
         "rec_legacy_research": "",
         "rec_legacy_doc": "",
@@ -435,6 +443,10 @@ T = {
         "bad_status_with_suggest": "Status not in suggested enum: {0} (suggest: {1}; allowed: Pending Fix, Fixed, Todo, Pending Dev, In Progress, Done, Closed, Resolved)",
         "summary_stale": "Summary stale: {0} summary total={1} actual={2}",
         "summary_stale_total": "Summary stale: Total summary={0} actual={1}",
+        "summary_stale_done": "Summary stale: {0} summary done={1} actual={2}",
+        "summary_stale_pending": "Summary stale: {0} summary pending={1} actual={2}",
+        "summary_inconsistent": "Summary inconsistent: {0} done({1})+pending({2})≠total({3})",
+        "summary_stale_rate": "Summary rate drift: {0} summary rate={1}% actual={2}",
         "summary_synced": "Summary synced",
         "nonstandard_header": "Section \"{0}\" header does not match a standard schema ({1} cols); refusing to write to avoid putting data in the wrong column. Fix the column order manually before add; if it is a supported 6/8-col single-date legacy schema, run standardize --migrate-schema.",
         "bad_time": "Time format should be YYYY-MM-DD HH:MM: {0}",
@@ -516,5 +528,26 @@ STATUS_SUGGESTIONS: dict[str, dict[str, list[str]]] = {
         "待处理": ["Todo", "Pending Dev"],
     },
 }
+
+
+# Explicit public API. Lets _lib.py use `from ._locale import (Locale, ...)`
+# instead of a star import (which produced ~190 ruff F405/F401 warnings).
+__all__ = [
+    "Section",
+    "Locale",
+    "LOCALES",
+    "T",
+    "STATUS_SUGGESTIONS",
+    "DUAL_DATE_COLS",
+    "SINGLE_DATE_COL",
+    "SINGLE_DATE_ALIASES",
+    "DATE_COLUMN_SEMANTICS",
+    "MIGRATEABLE_DATE_SEMANTICS",
+    "UNMAPPABLE_DATE_SEMANTICS",
+    "MAINTENANCE_RULE_MARKER",
+    "MAINTENANCE_RULE_MARKER_EN",
+    "TASKLIST_HOOK_MARKER",
+    "WIKI_ID_REF_RE",
+]
 
 

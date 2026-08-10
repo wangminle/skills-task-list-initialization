@@ -20,7 +20,7 @@
       "name": "add-and-check-bug-record",
       "prompt": "我们项目根的 task-list.md 已经存在了。现在发现一个 bug：用户在登录页输入正确密码但点了登录后页面无响应，控制台报 401。把它记进 task-list.md，然后跑一次校验确认没问题。",
       "expected_output": "使用 $SKILL_DIR/scripts/task_list_cli.py add 向「代码 Bug」分区追加一行 BUG-001，动作=修复，状态=待修复，发现时间为本机当前时间，完成时间为 -；add 写后默认自动 check（或显式再跑 check），报告应为通过/无错误。",
-      "files": [],
+      "files": ["evals/fixtures/eval2-task-list.md"],
       "expectations": [
         "在「代码 Bug」分区新增了一条记录，ID 形如 BUG-001",
         "新增记录的动作字段 = 修复，状态 = 待修复",
@@ -34,7 +34,7 @@
       "name": "standardize-legacy-single-date",
       "prompt": "我们这份 task-list.md 是半年前的，表头是老的 6 列（ID/动作/事项/完成日期/状态/备注），只有「完成日期」一列时间，跟你现在写的 dual-date 模板对不上。先帮我做一次诊断，只出报告别改文件。之后我会自己决定是否迁移。",
       "expected_output": "运行 $SKILL_DIR/scripts/task_list_cli.py standardize --file task-list.md 生成一份诊断报告，默认 report-only 不修改 task-list.md；报告应识别出当前为 single-date schema、提示可通过 --migrate-schema 升级、并指出其他结构问题；不应擅自重命名分区、移动记录或重写 ID。",
-      "files": [],
+      "files": ["evals/fixtures/eval3-legacy-single-date.md"],
       "expectations": [
         "运行了 $SKILL_DIR/scripts/task_list_cli.py standardize 子命令（而非 check 或 add）",
         "未对 task-list.md 做任何写入修改（report-only）",
@@ -48,7 +48,7 @@
       "name": "update-status-and-notes",
       "prompt": "task-list.md 里已有 BUG-001，状态还是「进行中」。代码已经修好了，请用 CLI 把它改成已修复，完成时间填今天本地时间，并在备注里追加「本地回归通过」。不要手改 Markdown。",
       "expected_output": "使用 $SKILL_DIR/scripts/task_list_cli.py update --id BUG-001 --status 已修复 --completed-time … --notes-append …；写后自动 check 通过；行内状态与完成时间已更新，备注含追加内容。",
-      "files": [],
+      "files": ["evals/fixtures/eval4-task-list.md"],
       "expectations": [
         "使用了 update 子命令（而非手改 Markdown 表格）",
         "BUG-001 的状态变为 已修复",
@@ -62,7 +62,7 @@
       "name": "add-syncs-summary",
       "prompt": "这份 task-list.md 末尾已经有「统计摘要」表，但数字还是全 0。请往「代码 Bug」追加一条已修复记录，并确保摘要表数字跟着更新，不要让我再手动跑 summary --write。",
       "expected_output": "使用 add 追加 BUG 记录；因文件已有统计摘要章节，add 默认自动重算摘要；摘要中代码 Bug 总数≥1且总计同步；check 不报告摘要漂移。",
-      "files": [],
+      "files": ["evals/fixtures/eval5-task-list.md"],
       "expectations": [
         "使用 CLI add 追加了至少一条代码 Bug 记录",
         "统计摘要表中「代码 Bug」的总数大于 0（不再全是 0）",

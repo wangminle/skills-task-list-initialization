@@ -5,7 +5,7 @@ description: Use when creating, standardizing, migrating, validating, or maintai
 
 # Task List Initialization
 
-> Skill version **V0.3.1**. Canonical string: repo root `VERSION`.
+> Skill version **V0.3.2**. Canonical string: repo root `VERSION`.
 
 ## Overview
 
@@ -172,4 +172,4 @@ Run `--help` for all options. Prefer CLI generation for new files, then review t
 - `references/task-list-template.md`: canonical Markdown templates for each profile.
 - `references/maintenance-rule.md`: canonical maintenance-rule text (Chinese and English), file-selection logic, language-matching guidance, and optional `Stop`-hook guarantee layer for installing into a project's `CLAUDE.md`/`AGENTS.md`.
 - `evals/evals.json`: skill-creator evaluation cases.
-- Repo root `VERSION`: current skill version string (`V0.3.1`).
+- Repo root `VERSION`: current skill version string (`V0.3.2`).
