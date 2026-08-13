@@ -5,7 +5,7 @@ description: Use when creating, standardizing, migrating, validating, or maintai
 
 # Task List Initialization
 
-> Skill version **V0.3.2**. Canonical string: repo root `VERSION`.
+> Skill version **V0.3.3**. Canonical string: repo root `VERSION`.
 
 ## Overview
 
@@ -20,7 +20,7 @@ The default model is intentionally small: a fixed header, task-type sections, an
 3. If a task list exists, preserve records and normalize only with user approval.
 4. Use the standard categories and 7-column table unless project evidence calls for extensions.
 5. When the user wants future agents to keep the list updated, install maintenance rules (opt-in). Prefer `install-maintenance` (and `--with-hook` when they want the Stop-hook guarantee). The command follows the same file-selection logic and rule text as `references/maintenance-rule.md` (`CLAUDE.md` if it exists, else `AGENTS.md`, else create `CLAUDE.md`), matched to the task-list's language. Ask before installing. Stop hook commands use `${CLAUDE_PROJECT_DIR}` so they keep working when the session cwd is not the repo root; re-running `--with-hook` upgrades legacy relative paths.
-6. Validate malformed/invalid ID formats, duplicate IDs, broken table rows, unsupported actions/statuses, invalid timestamps, and summary drift before finishing.
+6. Validate malformed/invalid ID formats, duplicate IDs, broken table rows, unsupported actions/statuses, invalid timestamps, summary drift, **and preview-breaking markup** (intra-table blank lines, raw HTML tags in cells, unclosed CommonMark code spans) before finishing. `check` passing is a preview gate, not only a schema gate.
 7. For a task list that has been used for a while, use `standardize` first. It defaults to diagnostics and reporting only; run repair only when the user explicitly asks for it or passes repair flags.
 
 ## Default Schema
@@ -56,6 +56,12 @@ Optional sections:
 - Use `待修复` for open bugs; use `待办` as the generic open status for docs/ops/reviews/adjustments/optimizations/plans (or `待开发` for feature work). Also supported: `进行中`, `已关闭`, `已解决`.
 - `已解决` is allowed for troubleshooting items that are diagnosed and closed; prefer `已完成` otherwise. It counts as a completed status.
 - Escape literal pipes inside table cells as `\|`. `standardize --apply-safe-fixes` can auto-escape unescaped `|` in overwide rows when status/time columns still align after merge.
+- **Preview safety (required):**
+  1. Data rows in the same table must be contiguous — **no blank lines between `|` rows**. Blanks are only allowed between the table and the next `##` heading. CommonMark/GFM ends a table at a blank line; later `| ... |` lines become a new (broken) table. `standardize --apply-safe-fixes` collapses those intra-table blanks but **must not rewrite fenced code blocks** (Markdown table *examples* keep their blank lines).
+  2. Cells must not contain **raw HTML tags** that change document flow (`<title>`, `<details>`, `<script>`, `<style>`, `<textarea>`, `<svg>`, `<html>`, `<head>`, `<body>`, `<table>`, `<iframe>`, `<xmp>`, `<noembed>`, `<noframes>`, `<plaintext>`). Wrap them in backticks (`` `<title>` ``) or write HTML entities. Do **not** globally replace every `<` — placeholders like `<id>` and comparisons like `a < b` are fine.
+  3. **Backticks on each data row must form closed CommonMark code spans**: an opener run of *n* backticks closes on the next unescaped run of exactly *n* (content in between may contain shorter runs). Double-backtick spans may contain a single backtick and may wrap HTML such as `<title>`; character-count parity is not enough — two backticks with no matching closer must fail. A backslash-escaped backtick is literal. For regex character classes, do not leave an opener unclosed; write the word「反引号」or wrap the whole token in a longer fence.
+  4. If you hand-edit the Markdown (skipping the CLI), run `check` again. `check` is the preview gate: it must fail on intra-table blanks, raw flow-breaking HTML, and unclosed backtick spans — a green `check` must not mean “preview is fine” unless those rules passed.
+  5. After syncing the ledger, if preview still looks wrong, look at intra-table blanks and raw HTML first (and re-run `check`; it should already name the line).
 - Cross-link entries with `[[BUG-001]]` / `[[DOC-036]]` wiki syntax; `check` reports dangling references.
 - Put implementation notes, changed files, review source, and validation results in `备注`.
 
@@ -94,11 +100,11 @@ python3 "$SKILL_DIR/scripts/task_list_cli.py" standardize --file task-list.md --
 
 Repair requires explicit flags:
 
-- `--apply-safe-fixes`: apply low-risk fixes such as adding missing empty standard sections, and escaping unescaped `|` inside data cells when the row can be realigned (usually notes/description).
+- `--apply-safe-fixes`: apply low-risk fixes such as adding missing empty standard sections, collapsing blank lines between table data rows (**not** inside fenced code blocks), and escaping unescaped `|` inside data cells when the row can be realigned (usually notes/description).
 - `--migrate-schema`: migrate legacy single-date schemas to `发现时间 / 完成时间`. Data rows whose cell count doesn't match the header (usually an unescaped `|` in a cell) are left untouched and reported as `migrate_warnings` (in `--fix-only` and `--format json` output) instead of being silently skipped; prefer `--apply-safe-fixes` first when the issue is only unescaped pipes.
 - `--fix-only`: output modifier — print only a repair summary (no full report); it does not trigger fixes itself, so pair it with `--apply-safe-fixes` or `--migrate-schema`.
 
-Do not automatically rename sections, move records between categories, or rewrite duplicate IDs without user approval. Those are semantic changes and should appear as report recommendations.
+Do not automatically rename sections, move records between categories, or rewrite duplicate IDs without user approval. Those are semantic changes and should appear as report recommendations. If the file still has「开源项目调研」, recommend renaming it to「调研事项」**and moving the whole section after「优化事项」** (renaming in place leaves it in the wrong template slot). `standardize` also warns when known sections appear out of template order (Features → Ops → Plans → Optimizations → Research) without relocating rows.
 
 **Schema variants.** A project may legitimately keep the legacy **single-date schema** (`ID/动作/事项/完成日期/状态/备注`, 6-col; or 8-col dev) and not migrate to the canonical dual-date model. `check`/`standardize` auto-detect which schema a file uses and validate against it (`--schema auto|dual|single`, default `auto`), so a single-date file in good shape passes instead of being flagged on every section. When the schema is single-date, the report notes that `--migrate-schema` can upgrade it (opt-in, requires approval). Do not force a migration just because the schema differs from the default. `add` detects the target section's schema too and appends a row with the matching column count (single-date 6-col, dual-date 7-col, or dev 8/9-col), so it works on a single-date file without hand-writing the row.
 
@@ -108,9 +114,11 @@ Do not automatically rename sections, move records between categories, or rewrit
 
 Every `standardize` report includes a **维护规则状态** section (read-only detection). It reports whether the project already has:
 
-- the canonical **会话结束任务同步** rule in `CLAUDE.md` / `AGENTS.md`, and
+- the canonical **会话结束任务同步** rule in `CLAUDE.md` / `AGENTS.md` (warn if **both** files contain it — install in one file only, prefer `CLAUDE.md`), and
 - the optional **Stop hook** in `.claude/settings.json`, and
-- **claim vs actual** consistency: if agent docs claim a Stop-hook / `settings.json` guarantee but no matching hook exists, the report flags `声明与实际不一致` (install the hook or soften the claim).
+- **claim vs actual** consistency **per tool**: a Claude hook does not satisfy an AGENTS.md Codex guarantee (and vice versa). If docs claim a Stop-hook / `settings.json` guarantee but no matching hook exists, the report flags `声明与实际不一致` (install the hook or soften the claim).
+- hook **portability**: commands that do not use `${CLAUDE_PROJECT_DIR}` (relative or absolute paths) are flagged.
+- `.gitignore` ignoring the whole `.claude/` directory (hooks would not clone). Ignoring only `.claude/settings.local.json` is fine.
 
 When the rule is missing, ask the user whether they want future agents to keep the list updated. If they agree, prefer `install-maintenance` (add `--with-hook` only when they also want the Stop-hook guarantee). That CLI path is idempotent and matches `references/maintenance-rule.md`. Manual install from the reference is still fine when the project needs custom wording. Do not install anything without explicit user consent (opt-in).
 
@@ -149,7 +157,7 @@ python3 "$SKILL_CLI" standardize --file task-list.md --migrate-schema --apply-sa
 python3 "$SKILL_CLI" archive --file task-list.md --older-than-days 90
 ```
 
-`init --lang {zh,en}` selects the template language (`zh` = Simplified Chinese, default; `en` = English). The other subcommands auto-detect the language from the target file. `check`/`standardize` accept `--schema {auto,dual,single}` (default `auto`) to validate a file that keeps the legacy single-date schema. `add` auto-matches the target section's schema and emits the corresponding column count, so no flag is needed. `check` also flags malformed IDs (e.g. `bug-001`, `BUG-12`) in the first column rather than silently skipping them, validates timestamps, reports dangling `[[ID]]` refs, and suggests nearest standard statuses for non-standard values. `add` refuses to write into a section whose header does not match a recognized schema (e.g. a reordered `ID / 状态 / 动作 / …`) instead of guessing the column layout — fix the header manually. `--migrate-schema` only upgrades supported 6/8-col single-date legacy schemas; it will refuse a reordered dual-date header rather than shift field meanings.
+`init --lang {zh,en}` selects the template language (`zh` = Simplified Chinese, default; `en` = English). The other subcommands auto-detect the language from the target file. `check`/`standardize` accept `--schema {auto,dual,single}` (default `auto`) to validate a file that keeps the legacy single-date schema. `add` auto-matches the target section's schema and emits the corresponding column count, so no flag is needed. `check` also flags malformed IDs (e.g. `bug-001`, `BUG-12`) in the first column rather than silently skipping them, validates timestamps, reports dangling `[[ID]]` refs, suggests nearest standard statuses for non-standard values, and **fails on preview-breaking markup**: blank lines between table rows (fenced code examples are ignored), raw flow-breaking HTML tags in cells, and unclosed CommonMark code spans on a data row. `add` refuses to write into a section whose header does not match a recognized schema (e.g. a reordered `ID / 状态 / 动作 / …`) instead of guessing the column layout — fix the header manually. `--migrate-schema` only upgrades supported 6/8-col single-date legacy schemas; it will refuse a reordered dual-date header rather than shift field meanings. `add`/`update` wrap blacklisted raw HTML tags (such as `<title>`) as inline code on write.
 
 **Write-path ergonomics:**
 
@@ -172,4 +180,4 @@ Run `--help` for all options. Prefer CLI generation for new files, then review t
 - `references/task-list-template.md`: canonical Markdown templates for each profile.
 - `references/maintenance-rule.md`: canonical maintenance-rule text (Chinese and English), file-selection logic, language-matching guidance, and optional `Stop`-hook guarantee layer for installing into a project's `CLAUDE.md`/`AGENTS.md`.
 - `evals/evals.json`: skill-creator evaluation cases.
-- Repo root `VERSION`: current skill version string (`V0.3.2`).
+- Repo root `VERSION`: current skill version string (`V0.3.3`).

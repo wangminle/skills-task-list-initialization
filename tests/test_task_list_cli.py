@@ -2727,6 +2727,414 @@ class TaskListCliTest(unittest.TestCase):
             # Archive file must not exist (it was committed then rolled back to absent).
             self.assertFalse(archive.exists())
 
+    # --- Preview-safety gate (table blanks / raw HTML / unpaired backticks) ---
+
+    def _preview_safety_file(self, *, blank_between=False, notes1="n", notes2="n"):
+        gap = "\n" if blank_between else ""
+        return (
+            "# 任务跟踪列表\n\n"
+            "## 代码 Bug\n\n"
+            "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            f"| BUG-001 | 修复 | first | 2026-01-01 10:00 | - | 待修复 | {notes1} |\n"
+            f"{gap}"
+            f"| BUG-002 | 修复 | second | 2026-01-01 11:00 | - | 待修复 | {notes2} |\n"
+            "\n## 调整事项\n\n"
+            "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+        )
+
+    def test_check_flags_blank_line_inside_table(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(self._preview_safety_file(blank_between=True), encoding="utf-8")
+            result = self.run_cli("check", "--file", str(target), check=False)
+            combined = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("空行切断", combined)
+            self.assertIn("BUG-001", combined)
+
+    def test_check_allows_blank_between_table_and_next_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(self._preview_safety_file(blank_between=False), encoding="utf-8")
+            result = self.run_cli("check", "--file", str(target))
+            self.assertEqual(result.returncode, 0)
+
+    def test_apply_safe_fixes_removes_intra_table_blank_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(self._preview_safety_file(blank_between=True), encoding="utf-8")
+            self.run_cli(
+                "standardize", "--file", str(target),
+                "--apply-safe-fixes", "--fix-only",
+            )
+            text = target.read_text(encoding="utf-8")
+            bug_block = text.split("## 调整事项")[0]
+            self.assertNotRegex(bug_block, r"\| BUG-001 .*\n\n\| BUG-002")
+            self.assertIn("\n\n## 调整事项", text)
+            after = self.run_cli("check", "--file", str(target))
+            self.assertEqual(after.returncode, 0)
+
+    def test_check_flags_raw_html_title_in_notes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                self._preview_safety_file(notes2="<title>"),
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target), check=False)
+            combined = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("裸 HTML", combined)
+            self.assertIn("<title>", combined)
+
+    def test_check_passes_html_inside_backticks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                self._preview_safety_file(notes2="`<title>`"),
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target))
+            self.assertEqual(result.returncode, 0)
+
+    def test_check_does_not_flag_placeholder_or_less_than(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                self._preview_safety_file(notes1="see <id>", notes2="a < b"),
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target))
+            self.assertEqual(result.returncode, 0)
+
+    def test_check_flags_unpaired_backticks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                self._preview_safety_file(notes2=r"regex $`"),
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target), check=False)
+            combined = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("反引号未闭合", combined)
+
+    def test_escape_cell_wraps_dangerous_html_but_not_placeholders(self):
+        mod = load_cli_module()
+        self.assertEqual(mod.escape_cell("see <title> here"), "see `<title>` here")
+        self.assertEqual(mod.escape_cell("already `<title>` ok"), "already `<title>` ok")
+        self.assertEqual(mod.escape_cell("see <id> and a < b"), "see <id> and a < b")
+        self.assertEqual(mod.escape_cell("<iframe>"), "`<iframe>`")
+
+    def test_add_wraps_raw_title_tag_in_notes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            result = self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "html in notes",
+                "--status", "待修复", "--notes", "broken <title> tag",
+            )
+            self.assertEqual(result.returncode, 0)
+            text = target.read_text(encoding="utf-8")
+            self.assertIn("`<title>`", text)
+            self.assertNotRegex(text, r"(?<!`) <title> (?!`)")
+            check = self.run_cli("check", "--file", str(target))
+            self.assertEqual(check.returncode, 0)
+
+    def test_check_english_preview_safety_messages(self):
+        content = (
+            "# Task Tracking List\n\n"
+            "## Bugs\n\n"
+            "| ID | Action | Description | Found | Done | Status | Notes |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| BUG-001 | Fix | first | 2026-01-01 10:00 | - | Pending Fix | n |\n"
+            "\n"
+            "| BUG-002 | Fix | second | 2026-01-01 11:00 | - | Pending Fix | <title> |\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(content, encoding="utf-8")
+            result = self.run_cli("check", "--file", str(target), check=False)
+            combined = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("blank line", combined.lower())
+            self.assertIn("raw HTML", combined)
+            self.assertIn("<title>", combined)
+
+    def _file_with_fenced_table_example(self):
+        return (
+            "# 任务跟踪列表\n\n"
+            "## 代码 Bug\n\n"
+            "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| BUG-001 | 修复 | real | 2026-01-01 10:00 | - | 待修复 | n |\n"
+            "\n"
+            "示例：\n\n"
+            "```markdown\n"
+            "| ID | 动作 |\n"
+            "| --- | --- |\n"
+            "\n"
+            "| BUG-999 | 修复 |\n"
+            "```\n"
+        )
+
+    def test_check_ignores_blank_inside_fenced_code_table_example(self):
+        # BUG-050: a fenced Markdown table example is not a real ledger table.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(self._file_with_fenced_table_example(), encoding="utf-8")
+            result = self.run_cli("check", "--file", str(target))
+            self.assertEqual(result.returncode, 0)
+
+    def test_apply_safe_fixes_preserves_blanks_inside_fenced_code(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            original = self._file_with_fenced_table_example()
+            target.write_text(original, encoding="utf-8")
+            self.run_cli(
+                "standardize", "--file", str(target),
+                "--apply-safe-fixes", "--fix-only",
+            )
+            text = target.read_text(encoding="utf-8")
+            self.assertIn("```markdown\n| ID | 动作 |\n| --- | --- |\n\n| BUG-999 | 修复 |\n```", text)
+            self.assertNotIn("BUG-999", text.split("```markdown")[0])
+
+    def test_check_allows_double_backtick_span_containing_backtick(self):
+        # BUG-051: CommonMark ``a ` b`` is a closed span, not unpaired.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                self._preview_safety_file(notes2="see ``a ` b`` here"),
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target))
+            self.assertEqual(result.returncode, 0)
+
+    def test_check_allows_html_inside_double_backticks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                self._preview_safety_file(notes2="``<title>``"),
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target))
+            self.assertEqual(result.returncode, 0)
+
+    def test_escape_cell_preserves_double_backtick_html_span(self):
+        mod = load_cli_module()
+        self.assertEqual(mod.escape_cell("``<title>``"), "``<title>``")
+        self.assertEqual(mod.escape_cell("see ``a ` b`` here"), "see ``a ` b`` here")
+
+    def test_check_allows_backslash_escaped_backtick(self):
+        # CommonMark: \ ` is a literal backtick, not an opener.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                self._preview_safety_file(notes2=r"path:\`file.md"),
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target))
+            self.assertEqual(result.returncode, 0)
+
+    def test_check_flags_even_count_unclosed_backticks(self):
+        # Two backticks with no matching closer must fail the preview gate.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                self._preview_safety_file(notes2="坏代码 ``never closed"),
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target), check=False)
+            combined = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("反引号未闭合", combined)
+
+    def test_check_flags_raw_iframe(self):
+        # BUG-052: flow-breaking tags beyond title/details/script/...
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                self._preview_safety_file(notes2="<iframe>"),
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target), check=False)
+            combined = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("裸 HTML", combined)
+            self.assertIn("iframe", combined.lower())
+
+    def test_maintenance_codex_claim_not_satisfied_by_claude_hook(self):
+        # BUG-048: AGENTS.md Codex guarantee must not be waived because Claude hook exists.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            (Path(tmp) / "CLAUDE.md").write_text(
+                "## 会话结束任务同步（必须）\n\n"
+                "若已配置 `.claude/settings.json` 的 Stop hook，则由该 hook 保证；"
+                "**未配置时由 agent 自觉执行**。\n",
+                encoding="utf-8",
+            )
+            (Path(tmp) / "AGENTS.md").write_text(
+                "## 会话结束任务同步（必须）\n\n"
+                "该时机由 `.Codex/settings.json` 的 Stop hook 保证触发（每会话一次）。\n",
+                encoding="utf-8",
+            )
+            claude_dir = Path(tmp) / ".claude"
+            claude_dir.mkdir()
+            (claude_dir / "settings.json").write_text(
+                json.dumps({
+                    "hooks": {
+                        "Stop": [{
+                            "matcher": "",
+                            "hooks": [{
+                                "type": "command",
+                                "command": 'bash "${CLAUDE_PROJECT_DIR}/.claude/hooks/tasklist_sync_reminder.sh"',
+                            }],
+                        }]
+                    }
+                }),
+                encoding="utf-8",
+            )
+            (claude_dir / "hooks").mkdir()
+            (claude_dir / "hooks" / "tasklist_sync_reminder.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+            result = self.run_cli("standardize", "--file", str(target), "--format", "json")
+            maint = json.loads(result.stdout)["maintenance"]
+            self.assertTrue(maint["hook_installed"])
+            self.assertFalse(maint["codex_hook_installed"])
+            self.assertTrue(maint["claim_mismatch"])
+
+    def test_maintenance_flags_rule_duplicated_in_both_agent_files(self):
+        # BUG-049: canonical install writes one file; both containing the marker is a warning.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            rule = "## 会话结束任务同步（必须）\n\n规则正文略。\n"
+            (Path(tmp) / "CLAUDE.md").write_text(rule, encoding="utf-8")
+            (Path(tmp) / "AGENTS.md").write_text(rule, encoding="utf-8")
+            result = self.run_cli("standardize", "--file", str(target))
+            self.assertIn("规则双写", result.stdout)
+
+    def test_maintenance_flags_absolute_hook_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            (Path(tmp) / "CLAUDE.md").write_text(
+                "## 会话结束任务同步\n\n规则。\n", encoding="utf-8"
+            )
+            claude_dir = Path(tmp) / ".claude"
+            hooks = claude_dir / "hooks"
+            hooks.mkdir(parents=True)
+            script = hooks / "tasklist_sync_reminder.sh"
+            script.write_text("#!/bin/bash\n", encoding="utf-8")
+            (claude_dir / "settings.json").write_text(
+                json.dumps({
+                    "hooks": {
+                        "Stop": [{
+                            "matcher": "",
+                            "hooks": [{
+                                "type": "command",
+                                "command": f"bash {script}",
+                            }],
+                        }]
+                    }
+                }),
+                encoding="utf-8",
+            )
+            result = self.run_cli("standardize", "--file", str(target), "--format", "json")
+            maint = json.loads(result.stdout)["maintenance"]
+            self.assertTrue(maint["hook_installed"])
+            self.assertTrue(maint["hook_nonportable"])
+            md = self.run_cli("standardize", "--file", str(target))
+            self.assertIn("CLAUDE_PROJECT_DIR", md.stdout)
+
+    def test_maintenance_flags_claude_dir_gitignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            (Path(tmp) / "CLAUDE.md").write_text(
+                "## 会话结束任务同步\n\n规则。\n", encoding="utf-8"
+            )
+            claude_dir = Path(tmp) / ".claude"
+            hooks = claude_dir / "hooks"
+            hooks.mkdir(parents=True)
+            (hooks / "tasklist_sync_reminder.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+            (claude_dir / "settings.json").write_text(
+                json.dumps({
+                    "hooks": {
+                        "Stop": [{
+                            "matcher": "",
+                            "hooks": [{
+                                "type": "command",
+                                "command": 'bash "${CLAUDE_PROJECT_DIR}/.claude/hooks/tasklist_sync_reminder.sh"',
+                            }],
+                        }]
+                    }
+                }),
+                encoding="utf-8",
+            )
+            (Path(tmp) / ".gitignore").write_text(".claude/\n", encoding="utf-8")
+            result = self.run_cli("standardize", "--file", str(target), "--format", "json")
+            maint = json.loads(result.stdout)["maintenance"]
+            self.assertTrue(maint["claude_gitignored"])
+            md = self.run_cli("standardize", "--file", str(target))
+            self.assertIn(".gitignore", md.stdout)
+
+    def test_maintenance_does_not_flag_settings_local_gitignore(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            (Path(tmp) / "CLAUDE.md").write_text(
+                "## 会话结束任务同步\n\n规则。\n", encoding="utf-8"
+            )
+            (Path(tmp) / ".gitignore").write_text(
+                ".claude/settings.local.json\n", encoding="utf-8"
+            )
+            result = self.run_cli("standardize", "--file", str(target), "--format", "json")
+            maint = json.loads(result.stdout)["maintenance"]
+            self.assertFalse(maint["claude_gitignored"])
+
+    def test_legacy_research_rec_mentions_moving_section(self):
+        # DEV-018: rename-in-place left 调研 in the wrong template slot.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "## 开源项目调研\n\n"
+                "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| RES-001 | 检查 | x | 2026-01-01 00:00 | - | 待办 | n |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli("standardize", "--file", str(target))
+            self.assertIn("开源项目调研", result.stdout)
+            self.assertIn("整段移到", result.stdout)
+
+    def test_standardize_warns_when_research_section_out_of_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 功能开发\n\n"
+                "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "## 调研事项\n\n"
+                "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| RES-001 | 检查 | x | 2026-01-01 00:00 | - | 待办 | n |\n"
+                "## 配置运维\n\n"
+                "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli("standardize", "--file", str(target))
+            self.assertIn("章节顺序", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

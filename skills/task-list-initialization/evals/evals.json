@@ -84,6 +84,34 @@
         "未在未确认时擅自安装",
         "安装后可用 standardize 的维护规则状态检测为已安装规则"
       ]
+    },
+    {
+      "id": 7,
+      "name": "check-and-fix-intra-table-blank",
+      "prompt": "我们项目根的 task-list.md 已经存在了。Markdown 预览从某条 BUG 开始表格变形，后面的分区看起来像消失了。请先用 CLI check 诊断，不要假设 check 通过。如果是表内空行切断了 GFM 表，用 standardize --apply-safe-fixes 删掉数据行之间的空行（章节与下一 ## 之间的空行要保留），然后再 check，直到通过。",
+      "expected_output": "check 非零并指出表内空行（含行号/ID）；--apply-safe-fixes 删除 BUG 行之间的空行后 check 通过；章节之间的空行仍在。",
+      "files": ["evals/fixtures/eval7-intra-table-blank.md"],
+      "expectations": [
+        "运行了 $SKILL_DIR/scripts/task_list_cli.py check，且首次 check 未通过（非零）",
+        "check 输出指出表格被空行切断（含行号，并提到 BUG-001 或 BUG-002）",
+        "使用了 standardize --apply-safe-fixes（而非只手删空行却不校验）",
+        "修复后 BUG-001 与 BUG-002 之间不再有空行",
+        "修复后再跑 check 通过"
+      ]
+    },
+    {
+      "id": 8,
+      "name": "check-raw-html-and-unpaired-backticks",
+      "prompt": "我们项目根的 task-list.md 已经存在了。预览从某条备注开始后面整页像空了。请用 CLI check 找出原因：单元格里的裸 HTML 标签（如 <title>）和未闭合的反引号。把裸 <title> 改成 `<title>`（或 HTML 实体），把该行多余的未闭合反引号去掉或按 CommonMark 补成对（合法的双反引号 span 不要拆开），再跑 check 直到通过。不要用 --apply-safe-fixes 假装修 HTML（它只删表内空行，且不得改围栏代码）。",
+      "expected_output": "check 失败并分别指出裸 HTML <title> 与反引号未闭合；修复为行内代码/成对反引号后 check 通过。不要全局把所有 < 换成实体。",
+      "files": ["evals/fixtures/eval8-raw-html-backticks.md"],
+      "expectations": [
+        "运行了 check，且首次 check 未通过",
+        "check 输出指出裸 HTML 标签 <title>",
+        "check 输出指出反引号未闭合",
+        "修复后备注中的 <title> 被反引号包裹（或写成 HTML 实体），该行反引号成对",
+        "未把占位符或比较符里的 < 全部替换；修复后再跑 check 通过"
+      ]
     }
   ]
 }

@@ -65,6 +65,42 @@ def text_claims_stop_hook(text: str) -> bool:
     return True
 
 
+def _hook_claim_kind(text: str) -> str | None:
+    """Which tool an agent file claims a Stop-hook guarantee for: claude, codex, or any."""
+    if not text_claims_stop_hook(text):
+        return None
+    flat = re.sub(r"[`*_]", "", text)
+    lower = flat.lower()
+    if ".codex" in lower or re.search(r"\bcodex\b", lower):
+        return "codex"
+    if ".claude" in lower:
+        return "claude"
+    return "any"
+
+
+def _gitignore_ignores_claude_dir(project_root: Path) -> bool:
+    """True when .gitignore ignores the whole .claude/ directory (hooks would not clone)."""
+    gitignore = project_root / ".gitignore"
+    if not gitignore.is_file():
+        return False
+    try:
+        raw = gitignore.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    for line in raw.splitlines():
+        stripped = line.split("#", 1)[0].strip()
+        if not stripped or stripped.startswith("!"):
+            continue
+        normalized = stripped.lstrip("/")
+        if normalized in {".claude", ".claude/", "**/.claude", "**/.claude/"}:
+            return True
+        if normalized.startswith(".claude/"):
+            rest = normalized[len(".claude/") :]
+            if rest in {"", "*", "**", "**/"} or rest.endswith("/") or "*" in rest:
+                return True
+    return False
+
+
 def suggest_status(raw: str, locale: Locale) -> list[str]:
     """Suggest nearest standard statuses for a non-standard value."""
     key = raw.strip().lower()
@@ -327,10 +363,283 @@ def split_cells(line: str) -> list[str]:
     return cells
 
 
+# Tags that change document flow in GFM/HTML previewers. Unknown tags (e.g. <id>)
+# and comparison operators (a < b) are left alone — do not globally escape every `<`.
+DANGEROUS_HTML_TAGS = (
+    "title",
+    "details",
+    "script",
+    "style",
+    "textarea",
+    "svg",
+    "html",
+    "head",
+    "body",
+    "table",
+    "iframe",
+    "xmp",
+    "noembed",
+    "noframes",
+    "plaintext",
+)
+DANGEROUS_HTML_TAG_RE = re.compile(
+    r"</?(?:" + "|".join(DANGEROUS_HTML_TAGS) + r")(?:\s[^>]*)?/?>",
+    re.IGNORECASE,
+)
+_FENCE_OPEN_RE = re.compile(r"^( {0,3})(`{3,}|~{3,})(.*)$")
+
+
+def _fenced_code_mask(lines: list[str]) -> list[bool]:
+    """True for lines inside (or delimiting) a CommonMark fenced code block."""
+    mask: list[bool] = []
+    inside = False
+    fence_char = ""
+    fence_len = 0
+    for line in lines:
+        if inside:
+            mask.append(True)
+            closer = re.match(r"^( {0,3})(" + re.escape(fence_char) + r"{3,})\s*$", line)
+            if closer and len(closer.group(2)) >= fence_len:
+                inside = False
+            continue
+        match = _FENCE_OPEN_RE.match(line)
+        if match:
+            marker = match.group(2)
+            info = match.group(3)
+            if not (marker[0] == "`" and "`" in info):
+                inside = True
+                fence_char = marker[0]
+                fence_len = len(marker)
+                mask.append(True)
+                continue
+        mask.append(False)
+    return mask
+
+
+def _is_table_line(line: str) -> bool:
+    return line.strip().startswith("|")
+
+
+def _table_row_id(line: str) -> str:
+    if not _is_table_line(line):
+        return ""
+    cells = split_cells(line)
+    if cells and re.match(r"^[A-Z]+-\d{3,}$", cells[0]):
+        return cells[0]
+    return ""
+
+
+def _backslash_escapes(text: str, index: int) -> bool:
+    """True when an odd number of backslashes immediately precede text[index]."""
+    slashes = 0
+    cursor = index - 1
+    while cursor >= 0 and text[cursor] == "\\":
+        slashes += 1
+        cursor -= 1
+    return slashes % 2 == 1
+
+
+def _next_unescaped_backtick_run(text: str, start: int) -> tuple[int, int] | None:
+    """Return [run_start, run_end) of the next unescaped backtick run, or None."""
+    index = start
+    length = len(text)
+    while index < length:
+        if text[index] != "`":
+            index += 1
+            continue
+        if _backslash_escapes(text, index):
+            index += 1
+            continue
+        end = index + 1
+        while end < length and text[end] == "`" and not _backslash_escapes(text, end):
+            end += 1
+        return index, end
+    return None
+
+
+def _code_span_ranges(text: str) -> tuple[list[tuple[int, int]], bool]:
+    """Return complete inline-code spans [start, end) and whether any opener never closed.
+
+    Follows CommonMark backtick-string pairing: an opener of length n closes on the next
+    run of exactly n unescaped backticks with at least one character of content in between.
+    A backslash-escaped backtick is literal punctuation, not a delimiter.
+    """
+    ranges: list[tuple[int, int]] = []
+    unclosed = False
+    index = 0
+    length = len(text)
+    while index < length:
+        run = _next_unescaped_backtick_run(text, index)
+        if run is None:
+            break
+        start, end_run = run
+        run_len = end_run - start
+        cursor = end_run
+        closer_end = None
+        while cursor < length:
+            nxt = _next_unescaped_backtick_run(text, cursor)
+            if nxt is None:
+                break
+            close_start, close_end = nxt
+            if close_end - close_start == run_len and close_start > end_run:
+                closer_end = close_end
+                break
+            cursor = close_end
+        if closer_end is not None:
+            ranges.append((start, closer_end))
+            index = closer_end
+        else:
+            unclosed = True
+            index = end_run
+    return ranges, unclosed
+
+
+def _text_outside_backticks(value: str) -> str:
+    ranges, _ = _code_span_ranges(value)
+    if not ranges:
+        return value
+    parts: list[str] = []
+    cursor = 0
+    for start, end in ranges:
+        parts.append(value[cursor:start])
+        cursor = end
+    parts.append(value[cursor:])
+    return "".join(parts)
+
+
+def _has_unclosed_backticks(value: str) -> bool:
+    _, unclosed = _code_span_ranges(value)
+    return unclosed
+
+
+def _wrap_inline_code(text: str) -> str:
+    fence_len = 1
+    while "`" * fence_len in text:
+        fence_len += 1
+    pad = " " if text.startswith("`") or text.endswith("`") else ""
+    fence = "`" * fence_len
+    return f"{fence}{pad}{text}{pad}{fence}"
+
+
+def _protect_dangerous_html(value: str) -> str:
+    """Wrap raw flow-breaking HTML tags in inline code; leave already-fenced tags alone."""
+    ranges, _ = _code_span_ranges(value)
+    covered: set[int] = set()
+    for start, end in ranges:
+        covered.update(range(start, end))
+    pieces: list[str] = []
+    index = 0
+    length = len(value)
+    while index < length:
+        if index in covered:
+            end = index
+            while end < length and end in covered:
+                end += 1
+            pieces.append(value[index:end])
+            index = end
+            continue
+        end = index
+        while end < length and end not in covered:
+            end += 1
+        chunk = value[index:end]
+        pieces.append(
+            DANGEROUS_HTML_TAG_RE.sub(lambda match: _wrap_inline_code(match.group(0)), chunk)
+        )
+        index = end
+    return "".join(pieces)
+
+
 def escape_cell(value: str) -> str:
     value = value.replace("\n", " ").strip()
+    value = _protect_dangerous_html(value)
     value = value.replace("|", "\\|")
     return value or "-"
+
+
+def _intra_table_blank_gaps(lines: list[str]) -> list[tuple[int, str, range]]:
+    """Find blank runs that sit between two `|` table rows in the same section.
+
+    Returns (1-based first blank line, nearest record ID, 0-based index range to drop).
+    Blanks between the last table row and the next `##` heading are not included.
+    Fenced code blocks are ignored so Markdown table *examples* are not treated as ledger tables.
+    """
+    fence = _fenced_code_mask(lines)
+    gaps: list[tuple[int, str, range]] = []
+    last_table_idx: int | None = None
+    for index, line in enumerate(lines):
+        if fence[index]:
+            last_table_idx = None
+            continue
+        if is_section_heading_line(line):
+            last_table_idx = None
+            continue
+        if _is_table_line(line):
+            if last_table_idx is not None and index > last_table_idx + 1:
+                gap = range(last_table_idx + 1, index)
+                if gap and all(not lines[j].strip() for j in gap):
+                    item_id = _table_row_id(lines[last_table_idx]) or _table_row_id(line)
+                    gaps.append((last_table_idx + 2, item_id, gap))
+            last_table_idx = index
+        elif line.strip():
+            last_table_idx = None
+    return gaps
+
+
+def preview_safety_issues(text: str, locale: Locale) -> list[str]:
+    """Flag GFM-preview breakers that parse_sections silently skips or cannot see."""
+    m = T[locale.name]
+    issues: list[str] = []
+    lines = text.splitlines()
+    for first_blank, item_id, _gap in _intra_table_blank_gaps(lines):
+        if item_id:
+            issues.append(m["table_blank_break"].format(first_blank, item_id))
+        else:
+            issues.append(m["table_blank_break_noid"].format(first_blank))
+    fence = _fenced_code_mask(lines)
+    for index, line in enumerate(lines):
+        if fence[index] or not _is_table_line(line):
+            continue
+        cells = split_cells(line)
+        if _is_separator_row(cells):
+            continue
+        if _has_unclosed_backticks(line):
+            issues.append(m["unpaired_backtick"].format(index + 1))
+        html_match = DANGEROUS_HTML_TAG_RE.search(_text_outside_backticks(line))
+        if html_match:
+            tag_match = re.match(r"</?([A-Za-z]+)", html_match.group(0))
+            tag = (tag_match.group(1) if tag_match else html_match.group(0)).lower()
+            issues.append(m["raw_html"].format(index + 1, tag))
+    return issues
+
+
+def collapse_intra_table_blank_lines(text: str, locale: Locale) -> tuple[str, list[str]]:
+    """Drop blank lines that sit between two table rows. Section-gap blanks are kept."""
+    lines = text.splitlines()
+    gaps = _intra_table_blank_gaps(lines)
+    if not gaps:
+        return text, []
+    drop: set[int] = set()
+    fixes: list[str] = []
+    m = T[locale.name]
+    for first_blank, item_id, gap in gaps:
+        drop.update(gap)
+        if item_id:
+            fixes.append(m["blank_collapse_fix"].format(first_blank, item_id))
+        else:
+            fixes.append(m["blank_collapse_fix_noid"].format(first_blank))
+    new_lines = [line for index, line in enumerate(lines) if index not in drop]
+    return "\n".join(new_lines).rstrip() + "\n", fixes
+
+
+def find_intra_table_blank_candidates(text: str, locale: Locale) -> list[str]:
+    candidates: list[str] = []
+    m = T[locale.name]
+    for first_blank, item_id, _gap in _intra_table_blank_gaps(text.splitlines()):
+        if item_id:
+            candidates.append(m["auto_fix_blank"].format(first_blank, item_id))
+        else:
+            candidates.append(m["auto_fix_blank_noid"].format(first_blank))
+    return candidates
 
 
 def _is_separator_row(cells: list[str]) -> bool:
@@ -351,7 +660,11 @@ def _is_separator_row(cells: list[str]) -> bool:
 def parse_sections(text: str) -> dict[str, dict[str, object]]:
     sections: dict[str, dict[str, object]] = {}
     current: str | None = None
-    for index, line in enumerate(text.splitlines()):
+    lines = text.splitlines()
+    fence = _fenced_code_mask(lines)
+    for index, line in enumerate(lines):
+        if fence[index]:
+            continue
         heading = re.match(r"^##\s+(.+?)\s*$", line)
         if heading:
             current = heading.group(1)
@@ -1452,6 +1765,7 @@ MAINTENANCE_RULE_ZH = """## 会话结束任务同步（必须）
 
 1. 把新增条目与状态变更写入根目录 `task-list.md`，与实际进度同步；
 2. 在本次最后一条回复中告知用户：记录/更新了哪些条目（ID + 简述）。
+3. 写入后跑 `check`。`check` 是预览门禁：表内空行、单元格裸 HTML、不成对反引号必须失败；手改 md 后也必须再跑。
 
 若本次未涉及任何任务完成，无需操作也无需提示。若已配置 `.claude/settings.json` 的 `Stop` hook，则由该 hook 保证每会话触发一次；**未配置时由 agent 在会话结束前自觉执行**（不要在未安装 hook 时写「由 Stop hook 保证触发」）。
 """
@@ -1462,6 +1776,7 @@ Before each session ends, if this session involved completing work — including
 
 1. Sync new entries and status changes into the root `task-list.md`, keeping it in step with actual progress;
 2. Tell the user in your final reply which entries you recorded/updated (ID + short note).
+3. Run `check` after writing. `check` is the preview gate: intra-table blank lines, raw HTML in cells, and unpaired backticks must fail; re-run `check` after any hand edit.
 
 If this session completed no work, do nothing and say nothing. If a `Stop` hook is configured in `.claude/settings.json`, that hook guarantees one trigger per session; **without a hook, the agent must run this sync on its own before ending** (do not claim a Stop-hook guarantee when none is installed).
 """
@@ -1878,6 +2193,7 @@ def classify_extension_recommendations(
             recommendations.append(m["rec_legacy_research"])
         if "文档事项" in headings:
             recommendations.append(m["rec_legacy_doc"])
+    recommendations.extend(section_order_recommendations(list(sections), locale))
     # Optimize-section suggestion: require >= 5 optimize records AND > 5% of total
     # to avoid false positives on projects with a single optimization entry.
     optimize_count = sum(
@@ -1901,6 +2217,27 @@ def classify_extension_recommendations(
     ):
         recommendations.append(m["rec_priority_without_dev"])
     return recommendations
+
+
+def section_order_recommendations(headings: list[str], locale: Locale) -> list[str]:
+    """Warn when known sections appear in an order that differs from the template."""
+    template = [
+        section.title
+        for section in (*locale.base_sections, locale.planning, locale.opt, locale.res)
+    ]
+    rank = {title: index for index, title in enumerate(template)}
+    seen: list[str] = []
+    for heading in headings:
+        title = locale.section_aliases.get(heading, heading)
+        if title in rank:
+            seen.append(title)
+    previous = -1
+    for title in seen:
+        current = rank[title]
+        if current < previous:
+            return [T[locale.name]["rec_section_order"].format(" → ".join(seen))]
+        previous = current
+    return []
 
 
 def analyze_standardization(
@@ -1927,6 +2264,7 @@ def analyze_standardization(
         recommendations.append(T[locale.name]["rec_dup_id_mapping"])
     auto_fixes = [T[locale.name]["auto_fix_candidate"].format(section.title) for section in missing]
     auto_fixes.extend(find_pipe_escape_candidates(text, locale))
+    auto_fixes.extend(find_intra_table_blank_candidates(text, locale))
     headings = list(sections)
     maintenance = detect_maintenance_rule(project_root)
     return {
@@ -2029,7 +2367,13 @@ def render_maintenance_lines(status: dict[str, object], locale: Locale) -> list[
         lines.append(f"- ⚠️ {m['codex_hook_label']}: {m['codex_hook_broken'].format(codex_broken)}")
     if claim_mismatch:
         lines.append(m["rec_claim_mismatch"])
-    elif not rule:
+    if status.get("rule_duplicated"):
+        lines.append(m["rec_rule_duplicated"])
+    if status.get("hook_nonportable"):
+        lines.append(m["rec_hook_nonportable"])
+    if status.get("claude_gitignored"):
+        lines.append(m["rec_claude_gitignored"])
+    if not rule:
         lines.append(m["rec_install_rule"])
     elif not hook and not codex_hook:
         lines.append(m["rec_install_hook"])
@@ -2049,14 +2393,16 @@ def _extract_hook_script_path(command: str) -> str | None:
     return None
 
 
-def _detect_hook_in_json(data: dict, project_root: Path) -> tuple[bool, str | None]:
+def _detect_hook_in_json(data: dict, project_root: Path) -> tuple[bool, str | None, bool]:
     """Check for a tasklist Stop hook in a parsed JSON hooks config.
 
-    Returns (found, broken_path). broken_path is set when the command references
-    a script path that does not exist on the filesystem.
+    Returns (found, broken_path, nonportable). broken_path is set when the command
+    references a script path that does not exist. nonportable is True when the command
+    does not use ${CLAUDE_PROJECT_DIR}.
     """
     found = False
     broken_path = None
+    nonportable = False
     for entry in data.get("hooks", {}).get("Stop", []):
         if not isinstance(entry, dict):
             continue
@@ -2067,17 +2413,17 @@ def _detect_hook_in_json(data: dict, project_root: Path) -> tuple[bool, str | No
             if TASKLIST_HOOK_MARKER not in cmd:
                 continue
             found = True
-            # Validate the script path exists
+            if "CLAUDE_PROJECT_DIR" not in cmd:
+                nonportable = True
             script_path = _extract_hook_script_path(cmd)
             if script_path:
-                # Resolve ${CLAUDE_PROJECT_DIR} to project root
                 resolved = script_path.replace("${CLAUDE_PROJECT_DIR}", str(project_root))
                 if not Path(resolved).exists():
                     broken_path = script_path
             break
         if found:
             break
-    return found, broken_path
+    return found, broken_path, nonportable
 
 
 def detect_maintenance_rule(project_root: Path) -> dict[str, object]:
@@ -2116,11 +2462,14 @@ def detect_maintenance_rule(project_root: Path) -> dict[str, object]:
     # Claude Code hook: .claude/settings.json
     hook_installed = False
     claude_hook_broken: str | None = None
+    hook_nonportable = False
     settings_path = project_root / ".claude" / "settings.json"
     if settings_path.exists():
         try:
             data = json.loads(settings_path.read_text(encoding="utf-8"))
-            hook_installed, claude_hook_broken = _detect_hook_in_json(data, project_root)
+            hook_installed, claude_hook_broken, hook_nonportable = _detect_hook_in_json(
+                data, project_root
+            )
         except (json.JSONDecodeError, OSError, AttributeError):
             hook_installed = False
 
@@ -2131,18 +2480,33 @@ def detect_maintenance_rule(project_root: Path) -> dict[str, object]:
     if codex_path.exists():
         try:
             data = json.loads(codex_path.read_text(encoding="utf-8"))
-            codex_hook_installed, codex_hook_broken = _detect_hook_in_json(data, project_root)
+            codex_hook_installed, codex_hook_broken, _ = _detect_hook_in_json(
+                data, project_root
+            )
         except (json.JSONDecodeError, OSError, AttributeError):
             codex_hook_installed = False
 
-    hook_claimed = any(text_claims_stop_hook(text) for text in agent_texts)
-    any_hook = hook_installed or codex_hook_installed
-    claim_mismatch = hook_claimed and not any_hook
+    hook_claimed = False
+    claim_mismatch = False
+    for text in agent_texts:
+        kind = _hook_claim_kind(text)
+        if kind is None:
+            continue
+        hook_claimed = True
+        if kind == "claude" and not hook_installed:
+            claim_mismatch = True
+        elif kind == "codex" and not codex_hook_installed:
+            claim_mismatch = True
+        elif kind == "any" and not (hook_installed or codex_hook_installed):
+            claim_mismatch = True
 
     return {
         "agent_file": agent_file,
         "rule_installed": rule_installed,
+        "rule_duplicated": len(containing) > 1,
         "hook_installed": hook_installed,
+        "hook_nonportable": hook_nonportable,
+        "claude_gitignored": _gitignore_ignores_claude_dir(project_root),
         "claude_hook_broken": claude_hook_broken,
         "codex_hook_installed": codex_hook_installed,
         "codex_hook_broken": codex_hook_broken,
@@ -2412,6 +2776,8 @@ def find_pipe_escape_candidates(text: str, locale: Locale) -> list[str]:
 def check_text(text: str, locale: Locale, schema: str = "dual") -> list[str]:
     issues: list[str] = []
     m = T[locale.name]
+    # Scan raw lines first: parse_sections skips blanks and cannot see preview breakers.
+    issues.extend(preview_safety_issues(text, locale))
     sections = parse_sections(text)
     expected_map = expected_sections(locale)
     if schema == "single":
@@ -2719,6 +3085,8 @@ def command_standardize(args: argparse.Namespace) -> int:
     chosen_profile = str(initial_report["recommended_profile"])
 
     if args.apply_safe_fixes:
+        working_text, blank_fixes = collapse_intra_table_blank_lines(working_text, locale)
+        applied_fixes.extend(blank_fixes)
         working_text, pipe_fixes = escape_unescaped_pipes(working_text, locale)
         applied_fixes.extend(pipe_fixes)
         working_text, fixes = add_missing_sections(working_text, chosen_profile, locale)
@@ -2837,9 +3205,9 @@ def archive_old_completed(
         return text, "", 0
 
     new_main_lines = [line for idx, line in enumerate(lines) if idx not in drop_lines]
-    # Collapse runs of blank lines left by removals inside tables (keep one blank max
-    # between blocks; do not strip table-adjacent blanks aggressively).
+    # Collapse blank runs left between remaining table rows (section-gap blanks stay).
     main_text = "\n".join(new_main_lines).rstrip() + "\n"
+    main_text, _blank_fixes = collapse_intra_table_blank_lines(main_text, locale)
 
     archive_parts = [
         locale.title.replace("任务跟踪列表", "任务跟踪列表（归档）").replace(
@@ -3113,7 +3481,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
         help="日期 schema：auto 自动检测（默认）、dual 双日期、single 单日期（合法变体，按此校验）",
     )
-    standardize.add_argument("--apply-safe-fixes", action="store_true", help="执行低风险修复：补齐缺失空分区、转义单元格内未转义的 |")
+    standardize.add_argument("--apply-safe-fixes", action="store_true", help="执行低风险修复：补齐缺失空分区、删除表内空行、转义单元格内未转义的 |")
     standardize.add_argument("--migrate-schema", action="store_true", help="迁移旧日期列 schema 到发现时间/完成时间 schema")
     standardize.add_argument("--fix-only", action="store_true", help="只输出修复摘要而不展开完整报告；需配合 --apply-safe-fixes 或 --migrate-schema 使用")
     standardize.add_argument("--dry-run", action="store_true", help="打印修复后的文件内容，不写回")

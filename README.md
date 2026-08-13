@@ -1,13 +1,13 @@
 # Task List Initialization · 任务清单初始化
 
-**Version:** `V0.3.2`
+**Version:** `V0.3.3`
 
 **[English](#english)** | **[中文](#中文)**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-V0.3.2-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-V0.3.3-blue.svg)](VERSION)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-141%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-168%20passing-brightgreen.svg)](tests/)
 
 ---
 
@@ -25,15 +25,15 @@ Every project accumulates bugs, features, reviews, tests, docs, and ops work. Th
 - **Bilingual** — Chinese (Simplified, default) and English task-lists; `init --lang` picks the language, other commands auto-detect it from the file.
 - **CLI tooling** — generate, append, update, validate, summarize, and standardize via `task_list_cli.py`.
 - **Report-first standardization** — diagnoses before it edits; repairs only with explicit flags.
-- **Safe `add` / `update` / strict `check`** — `add`/`update` auto-check after write (rollback on failure); `--notes-file` / `--from-json` avoid shell escaping; `update --id` patches status/notes/times in place. `check` flags malformed IDs and invalid timestamps; `add` refuses non-standard headers rather than guessing column layout.
+- **Safe `add` / `update` / strict `check`** — `add`/`update` auto-check after write (rollback on failure); `--notes-file` / `--from-json` avoid shell escaping; `update --id` patches status/notes/times in place. `check` flags malformed IDs, invalid timestamps, **and preview-breaking markup** (intra-table blank lines outside fenced code, raw flow-breaking HTML including `<iframe>`, unclosed CommonMark code spans). `add` refuses non-standard headers rather than guessing column layout; `escape_cell` wraps blacklisted raw HTML tags as inline code on write without rewriting already-closed double-backtick spans.
 - **Schema variants** — `check`/`standardize` auto-detect dual-date vs the supported single-date schema (`--schema auto|dual|single`). Compatible single-date labels include **`Done Date` / `完成日期`**, **`Found Date` / `发现日期`**, and also historical `Start Date` / `开始日期` / `Plan Date` / `规划日期` for read/append. `add` matches a section's recognized schema and appends the matching column count.
 - **Schema migration** — `--migrate-schema` upgrades losslessly-migrateable 6/8-col single-date headers (`Found Date` / `发现日期` → Found only; `Done Date` / `完成日期` → Done only) while **preserving day precision** (no fabricated `00:00`) and **never copying across semantics**. `Start Date` / `Plan Date` headers are recognized but refused with an explicit unmappable message (file unchanged).
-- **Maintenance-rule check** — `standardize` detects the session-end sync rule and Stop hook, and flags **claim vs actual** mismatches (docs assert a Stop-hook guarantee but none is installed).
+- **Maintenance-rule check** — `standardize` detects the session-end sync rule and Stop hook, and flags **per-tool claim vs actual** mismatches (a Claude hook does not satisfy a Codex claim), rule duplication, hooks that omit `${CLAUDE_PROJECT_DIR}`, and `.gitignore` ignoring the whole `.claude/` directory.
 - **Generic Todo status** — `待办` / `Todo` for non-bug open work; non-standard statuses get suggested mappings.
-- **Safe pipe escape** — `--apply-safe-fixes` can merge/escape unescaped `|` in overwide rows.
+- **Safe pipe escape + intra-table blanks** — `--apply-safe-fixes` can merge/escape unescaped `|` in overwide rows and delete blank lines between table data rows (**not** inside fenced code blocks).
 - **Wiki cross-refs** — `[[BUG-001]]` syntax with dangling-reference detection in `check`.
 - **Archive** — `archive --older-than-days N` moves old completed rows to `task-list-archive-YYYYMM.md`.
-- **Tested** — 130 unit tests covering init, add, update, list, sections, from-json, notes-file, auto-check rollback, check, summary, standardize, archive, install-maintenance (including CLAUDE_PROJECT_DIR Stop-hook path + legacy relative-path upgrade), aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, maintenance-rule detection (including claim mismatch and cross-file idempotence), schema-variant detection, timestamp validation, invalid-ID detection, non-standard-header rejection, archive ID non-reuse, pipe escape, wiki refs, status suggestions, case-insensitive section resolution, English locale, summary drift four-field comparison, rate precision cap, time-reverse detection, ID-order regression detection, duplicate-record detection, and Codex hook path validation.
+- **Tested** — 168 unit tests covering init, add, update, list, sections, from-json, notes-file, auto-check rollback, check, summary, standardize, archive, install-maintenance (including CLAUDE_PROJECT_DIR Stop-hook path + legacy relative-path upgrade), aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, maintenance-rule detection (including per-tool claim mismatch, rule duplication, non-portable hook paths, `.claude/` gitignore), schema-variant detection, timestamp validation, invalid-ID detection, non-standard-header rejection, archive ID non-reuse, pipe escape, wiki refs, status suggestions, case-insensitive section resolution, English locale, summary drift four-field comparison, rate precision cap, time-reverse detection, ID-order regression detection, duplicate-record detection, Codex hook path validation, section-order recommendations, and **preview-safety** (intra-table blanks, fenced-code exclusion, raw HTML including iframe, CommonMark backtick pairing).
 
 ### The Task List Standard
 
@@ -159,7 +159,7 @@ Pick the smallest variant that fits. `development` is intended only when priorit
 
 | Flag | Behavior |
 | --- | --- |
-| `--apply-safe-fixes` | Low-risk fixes, e.g. add missing empty sections |
+| `--apply-safe-fixes` | Low-risk fixes, e.g. add missing empty sections, collapse intra-table blanks |
 | `--migrate-schema` | Migrate a supported 6/8-col single-date header to Found / Done (review first; see caveat below) |
 | `--fix-only` | Output modifier — print only a repair summary; pair with `--apply-safe-fixes` or `--migrate-schema` |
 
@@ -175,13 +175,13 @@ A project may legitimately keep a **compatible single-date schema** (`Done Date`
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-130 tests, all passing.
+168 tests, all passing.
 
 ### Project Structure
 
 ```
 skills-task-list-initialization/
-├── VERSION                                   # V0.3.2
+├── VERSION                                   # V0.3.3
 ├── skills/task-list-initialization/
 │   ├── SKILL.md                              # Skill definition
 │   ├── evals/
@@ -194,7 +194,7 @@ skills-task-list-initialization/
 │       ├── task_list_cli.py                  # CLI entry (re-exports)
 │       └── _tasklist/                        # Implementation package (_lib.py, _locale.py)
 ├── tests/
-│   └── test_task_list_cli.py                 # Unit tests (130)
+│   └── test_task_list_cli.py                 # Unit tests (168)
 ├── LICENSE                                   # MIT
 └── README.md
 ```
@@ -204,6 +204,14 @@ skills-task-list-initialization/
 [MIT](LICENSE) © 2026 fenix-wangminle.
 
 ### Changelog
+
+#### V0.3.3
+
+- `check` is a Markdown preview gate: intra-table blanks (fenced code excluded), raw flow-breaking HTML (`<title>`, `<iframe>`, `<xmp>`, …), and unclosed CommonMark code spans fail with line numbers
+- `--apply-safe-fixes` collapses blank lines between table data rows (section-gap blanks and fenced examples kept)
+- `escape_cell` wraps blacklisted raw HTML as inline code without rewriting closed double-backtick spans; placeholders like `<id>` and `a < b` are left alone
+- `standardize` flags per-tool hook-claim mismatch, rule duplication, non-portable hook paths, `.claude/` gitignore, and section-order drift; legacy「开源项目调研」recommendations include moving the whole section
+- Field rules in `SKILL.md` / `task-list-standard.md`; evals 7–8 cover preview-break fixtures; **168** unit tests
 
 #### V0.3.2
 
@@ -244,15 +252,15 @@ skills-task-list-initialization/
 - **中英双语**——中文（简体，默认）与英文 task-list；`init --lang` 选择语言，其余命令按文件自动检测。
 - **命令行工具**——通过 `task_list_cli.py` 完成生成、追加、更新、校验、统计与标准化。
 - **先诊断后修复**——默认只生成报告，必须显式开启参数才会改写文件。
-- **安全 add / update / 严格 check**——`add`/`update` 写后自动校验（失败回滚）；`--notes-file` / `--from-json` 避开 shell 转义；`update --id` 就地改状态/备注/时间。`check` 检出非法 ID 与非法时间戳；`add` 拒绝非标准表头而非猜测列布局。
+- **安全 add / update / 严格 check**——`add`/`update` 写后自动校验（失败回滚）；`--notes-file` / `--from-json` 避开 shell 转义；`update --id` 就地改状态/备注/时间。`check` 检出非法 ID、非法时间戳，以及**预览损坏写法**（表内空行且跳过围栏代码、含 `<iframe>` 的裸 HTML、未按 CommonMark 闭合的反引号）。`add` 拒绝非标准表头而非猜测列布局；写入时把黑名单裸 HTML 标签包进行内代码，且不改写已闭合的双反引号 span。
 - **schema 变体**——`check`/`standardize` 自动识别双日期与受支持的单日期 schema（`--schema auto|dual|single`）。兼容的单日期标签包括 **`完成日期` / `Done Date`**、**`发现日期` / `Found Date`**，以及历史的 `开始日期` / `规划日期`（可读可追加）。`add` 按分区已识别的 schema 追加对应列数。
 - **结构迁移**——`--migrate-schema` 将可无损迁移的 6/8 列单日期表头升级为双日期：`发现日期` → 仅写入发现时间；`完成日期` → 仅写入完成时间；**保持日精度**（不补造 `00:00`），**禁止跨语义复制**。`开始日期` / `规划日期` 可识别但拒绝迁移并给出明确「无法映射」说明（文件不变）。
-- **维护规则检测**——`standardize` 检查会话结束同步规则与 Stop hook，并做**声明 vs 实际**一致性校验（文档声称由 hook 保证触发但实际未装 → 标红）。
+- **维护规则检测**——`standardize` 检查会话结束同步规则与 Stop hook，并做**按工具**的声明 vs 实际校验（Claude hook 不能顶替 Codex 声明）；同时告警规则双写、未使用 `${CLAUDE_PROJECT_DIR}` 的 hook、以及 `.gitignore` 忽略整个 `.claude/`。
 - **通用待办状态**——`待办` / `Todo` 覆盖非 Bug 类未完成；非标准状态附带建议映射。
-- **自动转义 `|`**——`--apply-safe-fixes` 可合并并转义导致列数错乱的未转义 `|`。
+- **自动转义 `|` 与表内空行**——`--apply-safe-fixes` 可合并并转义导致列数错乱的未转义 `|`，并删除数据行之间的空行（**不改围栏代码块**）。
 - **条目互引**——`[[BUG-001]]` 语法，`check` 检测悬空引用。
 - **归档**——`archive --older-than-days N` 将旧的已完成记录移到 `task-list-archive-YYYYMM.md`。
-- **经过测试**——130 个单元测试，覆盖 init、add、update、list、sections、from-json、notes-file、写后校验回滚、check、summary、standardize、archive、install-maintenance（含 `CLAUDE_PROJECT_DIR` Stop hook 路径与旧相对路径升级）、分区别名与反向别名、标题空白容错、`--fix-only` 语义、维护规则声明一致性与跨文件幂等、schema 变体检测、时间戳校验、非法 ID 检出、非标准表头拒绝、归档后 ID 不复用、管道符转义、互引检测、状态建议映射、分区大小写不敏感解析与英文 locale、摘要漂移四字段比较、完成率精度上限、时间倒置检测、ID 行序回退检测、重复记录检测与 Codex hook 路径校验。
+- **经过测试**——168 个单元测试，覆盖 init、add、update、list、sections、from-json、notes-file、写后校验回滚、check、summary、standardize、archive、install-maintenance（含 `CLAUDE_PROJECT_DIR` Stop hook 路径与旧相对路径升级）、分区别名与反向别名、标题空白容错、`--fix-only` 语义、维护规则声明一致性（按工具拆分、规则双写、非便携 hook、`.claude/` gitignore）与跨文件幂等、schema 变体检测、时间戳校验、非法 ID 检出、非标准表头拒绝、归档后 ID 不复用、管道符转义、互引检测、状态建议映射、分区大小写不敏感解析与英文 locale、摘要漂移四字段比较、完成率精度上限、时间倒置检测、ID 行序回退检测、重复记录检测、Codex hook 路径校验、章节顺序建议，以及**预览安全**（表内空行、围栏代码排除、含 iframe 的裸 HTML、CommonMark 反引号配对）。
 
 ### 任务清单标准
 
@@ -376,7 +384,7 @@ python3 "$SKILL_CLI" standardize \
 
 | 参数 | 行为 |
 | --- | --- |
-| `--apply-safe-fixes` | 低风险修复，如补齐缺失空分区 |
+| `--apply-safe-fixes` | 低风险修复，如补齐缺失空分区、删除表内空行 |
 | `--migrate-schema` | 将受支持的 6/8 列单日期表头迁移为「发现时间 / 完成时间」（先审阅；见下方注意） |
 | `--fix-only` | 输出修饰：仅打印修复摘要；需配合 `--apply-safe-fixes` 或 `--migrate-schema` |
 
@@ -392,13 +400,13 @@ python3 "$SKILL_CLI" standardize \
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-121 个测试，全部通过。
+168 个测试，全部通过。
 
 ### 项目结构
 
 ```
 skills-task-list-initialization/
-├── VERSION                                   # V0.3.2
+├── VERSION                                   # V0.3.3
 ├── skills/task-list-initialization/
 │   ├── SKILL.md                              # 技能定义
 │   ├── evals/
@@ -411,7 +419,7 @@ skills-task-list-initialization/
 │       ├── task_list_cli.py                  # CLI 入口（再导出）
 │       └── _tasklist/                        # 实现包（_lib.py、_locale.py）
 ├── tests/
-│   └── test_task_list_cli.py                 # 单元测试（130）
+│   └── test_task_list_cli.py                 # 单元测试（168）
 ├── LICENSE                                   # MIT
 └── README.md
 ```
@@ -421,6 +429,14 @@ skills-task-list-initialization/
 [MIT](LICENSE) © 2026 fenix-wangminle。
 
 ### 更新日志
+
+#### V0.3.3
+
+- `check` 成为 Markdown 预览门禁：表内空行（跳过围栏代码）、裸的流式 HTML（`<title>`、`<iframe>`、`<xmp>` 等）、未按 CommonMark 闭合的反引号均失败并给出行号
+- `--apply-safe-fixes` 删除数据行之间的空行（章节空行与围栏内示例保留）
+- `escape_cell` 写盘时把黑名单裸 HTML 包进行内代码，且不改写已闭合的双反引号 span；`<id>`、`a < b` 不误伤
+- `standardize` 按工具校验 hook 声明、告警规则双写/非便携路径/`.claude/` 被 gitignore、以及章节顺序偏离；「开源项目调研」建议含整段后移
+- `SKILL.md` / `task-list-standard.md` 补预览安全字段规则；evals 7–8 覆盖预览损坏夹具；**168** 个单元测试
 
 #### V0.3.2
 

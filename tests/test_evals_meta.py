@@ -10,6 +10,7 @@ exhibits that state.
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -33,9 +34,9 @@ class EvalsMetaTest(unittest.TestCase):
     def test_evals_json_is_valid_and_has_expected_count(self):
         data = json.loads(EVALS_JSON.read_text(encoding="utf-8"))
         self.assertEqual(data["skill_name"], "task-list-initialization")
-        self.assertEqual(len(data["evals"]), 6)
+        self.assertEqual(len(data["evals"]), 8)
         ids = [e["id"] for e in data["evals"]]
-        self.assertEqual(ids, [1, 2, 3, 4, 5, 6])
+        self.assertEqual(ids, [1, 2, 3, 4, 5, 6, 7, 8])
 
     def test_all_referenced_fixtures_exist(self):
         data = json.loads(EVALS_JSON.read_text(encoding="utf-8"))
@@ -107,6 +108,37 @@ class EvalsMetaTest(unittest.TestCase):
         # The 总计 row must read all zeros (the stale state the prompt describes).
         total_line = next(line for line in text.splitlines() if "**总计**" in line)
         self.assertIn("| 0 | 0 | 0 | 0%", total_line.replace("**", ""))
+
+    def test_eval7_fixture_check_fails_on_intra_table_blank(self):
+        """eval 7's fixture must fail check for a blank between BUG rows, then pass after safe-fixes."""
+        data = json.loads(EVALS_JSON.read_text(encoding="utf-8"))
+        ev7 = next(e for e in data["evals"] if e["id"] == 7)
+        fixture = SKILL_DIR / ev7["files"][0]
+        before = _run_cli("check", "--file", str(fixture))
+        self.assertNotEqual(before.returncode, 0, before.stdout + before.stderr)
+        self.assertIn("空行切断", before.stdout + before.stderr)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(fixture.read_text(encoding="utf-8"), encoding="utf-8")
+            _run_cli("standardize", "--file", str(target), "--apply-safe-fixes", "--fix-only")
+            after = _run_cli("check", "--file", str(target))
+            self.assertEqual(after.returncode, 0, after.stdout + after.stderr)
+            text = target.read_text(encoding="utf-8")
+            bug_block = text.split("## 调整事项")[0]
+            self.assertNotRegex(bug_block, r"\| BUG-001 .*\n\n\| BUG-002")
+
+    def test_eval8_fixture_check_fails_on_html_and_backticks(self):
+        """eval 8's fixture must fail check for raw <title> and unpaired backticks."""
+        data = json.loads(EVALS_JSON.read_text(encoding="utf-8"))
+        ev8 = next(e for e in data["evals"] if e["id"] == 8)
+        fixture = SKILL_DIR / ev8["files"][0]
+        result = _run_cli("check", "--file", str(fixture))
+        combined = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, combined)
+        self.assertIn("裸 HTML", combined)
+        self.assertIn("<title>", combined)
+        self.assertIn("反引号未闭合", combined)
 
 
 if __name__ == "__main__":
