@@ -12,6 +12,65 @@ from helpers import CliTestCase, load_cli_module  # noqa: E402
 
 
 class CliCheckTest(CliTestCase):
+    def test_check_warns_prefix_misplacement_without_failing(self):
+        # REQ-08: a DEV-prefixed record physically under 检查事项 (expects CHK-) is
+        # reported as a named warning with line/section/expected prefix; the gate
+        # still passes and the record is not moved.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n## 检查事项\n\n"
+                "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| DEV-074 | 检查 | 错位记录 | 2026-08-17 09:00 | - | 待办 | - |\n",
+                encoding="utf-8",
+            )
+            before = target.read_text(encoding="utf-8")
+            result = self.run_cli("check", "--file", str(target), check=False)
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("前缀错位警告", result.stdout)
+            self.assertIn("DEV-074", result.stdout)
+            self.assertIn("检查事项", result.stdout)
+            self.assertIn("CHK-", result.stdout)
+            self.assertIn("检查通过", result.stdout)
+            self.assertEqual(target.read_text(encoding="utf-8"), before)
+
+    def test_check_prefix_warnings_print_alongside_errors(self):
+        # REQ-08: warnings print even when hard errors exist; the exit code stays
+        # driven by errors (1 here), warnings alone never fail the gate.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n## 检查事项\n\n"
+                "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| DEV-074 | 检查 | 错位记录 | 2026-08-17 09:00 | - | 待办 | - |\n"
+                "| DEV-074 | 检查 | 重复记录 | 2026-08-17 09:10 | - | 待办 | - |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target), check=False)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("重复 ID", result.stdout)
+            self.assertIn("前缀错位警告", result.stdout)
+            self.assertIn("DEV-074", result.stdout)
+
+    def test_check_prefix_warning_english_locale(self):
+        # REQ-08: the warning header is localized for en files.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# Task Tracker\n\n## Reviews\n\n"
+                "| ID | Action | Item | Found | Done | Status | Notes |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| DEV-074 | Review | misfiled record | 2026-08-17 09:00 | - | Pending Fix | - |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target), check=False)
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("Prefix misplacement warnings", result.stdout)
+            self.assertIn("DEV-074", result.stdout)
+            self.assertIn("CHK-", result.stdout)
+
     def test_check_reports_duplicate_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "task-list.md"

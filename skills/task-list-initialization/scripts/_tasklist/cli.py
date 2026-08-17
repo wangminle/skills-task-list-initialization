@@ -21,8 +21,14 @@ from .migration import migrate_legacy_schema
 from .parser import _collect_wiki_refs, _fenced_code_mask, collect_records, find_record_line, is_section_heading_line, parse_sections, section_headers_by_title
 from .renderer import add_missing_sections, append_notes, build_row_for_headers, build_template, collapse_intra_table_blank_lines, escape_unescaped_pipes, insert_row, replace_row_line, table_line
 from .schemas import _reject_reversed_times, cell_at_field, date_column_semantic, default_completed_time, detect_locale, detect_schema, find_section_by_title, get_locale, header_field_index, local_minute_now, matches_single_date_header, normalize_time, prefix_for_section, section_for_title, single_date_cell
-from .summary import has_summary_section, update_summary_text
-from .validator import _has_structural_issues, analyze_standardization, check_text, render_markdown_report, summary_drift_issues, validate_action_status
+from .summary import (
+    SummaryPolicy,
+    has_summary_section,
+    resolve_summary_policy,
+    summary_sync_would_change_caliber,
+    update_summary_text,
+)
+from .validator import _has_structural_issues, analyze_standardization, check_text, prefix_mismatches, render_markdown_report, summary_drift_issues, validate_action_status
 
 def read_task_list(path: Path, *, lang: str = "zh") -> str:
     """Read a task-list file with localized, single-line errors (BUG-028/BUG-038).
@@ -341,7 +347,7 @@ def command_add(args: argparse.Namespace) -> int:
     # BUG-064: do not auto-rewrite the summary on an already-broken file — that path
     # can delete adjacent section headers and then pass check on the damaged result.
     sync_summary = (not args.no_sync_summary) and (not _has_structural_issues(original, locale))
-    text, synced = maybe_sync_summary(text, locale, sync_summary)
+    text, synced, stale_summary = maybe_sync_summary(text, locale, sync_summary, baseline=original)
 
     if args.dry_run:
         for _, _, row in added:
@@ -355,7 +361,7 @@ def command_add(args: argparse.Namespace) -> int:
         locale,
         dry_run=False,
         no_check=args.no_check,
-        skip_summary_drift=args.no_sync_summary,
+        skip_summary_drift=args.no_sync_summary or stale_summary,
     )
     if rc != 0:
         return rc
@@ -532,7 +538,7 @@ def command_update(args: argparse.Namespace) -> int:
 
     new_text = replace_row_line(original, line_index, cells)
     sync_summary = (not args.no_sync_summary) and (not _has_structural_issues(original, locale))
-    new_text, synced = maybe_sync_summary(new_text, locale, sync_summary)
+    new_text, synced, stale_summary = maybe_sync_summary(new_text, locale, sync_summary, baseline=original)
     if args.dry_run:
         print(table_line(cells))
         return 0
@@ -543,7 +549,7 @@ def command_update(args: argparse.Namespace) -> int:
         locale,
         dry_run=False,
         no_check=args.no_check,
-        skip_summary_drift=args.no_sync_summary,
+        skip_summary_drift=args.no_sync_summary or stale_summary,
     )
     if rc != 0:
         return rc
@@ -770,20 +776,81 @@ def command_check(args: argparse.Namespace) -> int:
     locale = get_locale(detect_locale(text))
     schema = args.schema if args.schema != "auto" else detect_schema(text, locale)
     issues = check_text(text, locale, schema)
+    # REQ-08: prefix/section misplacement is a warning, not an error. standardize already
+    # reports these records; check must surface the same warning list without moving
+    # records (reclassification is a semantic change reserved for the user) and without
+    # failing the gate - post-write auto-check must not roll back on warnings alone.
+    warnings = prefix_mismatches(collect_records(text), locale)
+    for issue in issues:
+        print(issue)
+    if warnings:
+        print(T[locale.name]["check_prefix_warnings"])
+        for warning in warnings:
+            print(warning)
     if issues:
-        for issue in issues:
-            print(issue)
         return 1
     print(T[locale.name]["check_ok"])
     return 0
+
+def _print_summary_rows_block(
+    label: str, rows: list[tuple[str, int, int, int]], locale_name: str
+) -> None:
+    print(label)
+    for title, total, done, pending in rows:
+        print(T[locale_name]["summary_row_counts"].format(title, total, done, pending))
+
+
+def _print_summary_policy_conflict(decision, locale_name: str) -> None:
+    """Render the dual-caliber report shown when auto must refuse (REQ-07)."""
+    m = T[locale_name]
+    print(m["summary_policy_conflict"])
+    _print_summary_rows_block(m["by_prefix"], decision.prefix_rows, locale_name)
+    _print_summary_rows_block(m["by_section"], decision.section_rows, locale_name)
+    if decision.matches_existing is SummaryPolicy.BY_PREFIX:
+        print(m["summary_policy_match_prefix"])
+    elif decision.matches_existing is SummaryPolicy.BY_SECTION:
+        print(m["summary_policy_match_section"])
+    else:
+        print(m["summary_policy_no_match"])
+    print(m["summary_policy_refused"])
+    print(m["summary_policy_hint"])
+
 
 def command_summary(args: argparse.Namespace) -> int:
     path = Path(args.file)
     text = read_task_list(path)
     locale = get_locale(detect_locale(text))
+    policy = SummaryPolicy(args.policy)
+    decision = resolve_summary_policy(text, locale, policy)
+    # REQ-06: rows whose cell count disagrees with the section header (check reports them
+    # as col_mismatch, usually an unescaped | splitting a cell) must not feed statistics:
+    # header-indexed reads land on cell fragments, so dates/effort strings would surface
+    # as statuses, and totals would count broken rows.
+    headers_by_title = section_headers_by_title(text)
+    skipped_rows = sum(
+        1
+        for title, _, cells in collect_records(text)
+        if headers_by_title.get(title) and len(cells) != len(headers_by_title[title])
+    )
 
     if args.write:
-        new_text = update_summary_text(text, locale)
+        # REQ-07: auto never rewrites a summary while the calibers disagree — the file's
+        # counting semantics are ambiguous, so the user must pick a caliber explicitly.
+        # BUG-074: gate on --write only; a bare --dry-run must stay on the read-only
+        # stats view instead of printing the whole rewritten file (or refusing with
+        # exit 1 on conflict) as if a write had been requested.
+        if decision.conflict and policy is SummaryPolicy.AUTO:
+            _print_summary_policy_conflict(decision, locale.name)
+            return 1
+        new_text = update_summary_text(text, locale, decision.rows)
+        # The recount drops width-mismatched rows; say so on stderr so the number change
+        # (e.g. 总计 260 → 254) is never silent. stderr keeps --dry-run stdout a clean
+        # copy of the file content for redirect (BUG-009 convention).
+        if skipped_rows:
+            print(
+                T[locale.name]["summary_skipped_col_mismatch"].format(skipped_rows),
+                file=sys.stderr,
+            )
         if args.dry_run:
             print(new_text, end="")
             return 0
@@ -792,23 +859,54 @@ def command_summary(args: argparse.Namespace) -> int:
         return 0
 
     records = collect_records(text)
-    headers_by_title = section_headers_by_title(text)
-    by_section = Counter(title for title, _, _ in records)
+    # REQ-06: rows whose cell count disagrees with the section header (check reports them
+    # as col_mismatch, usually an unescaped | splitting a cell) must not feed statistics:
+    # header-indexed reads land on cell fragments, so dates/effort strings would surface
+    # as statuses, and totals would count broken rows.
+    stat_records = [
+        (title, line_no, cells)
+        for title, line_no, cells in records
+        if not headers_by_title.get(title) or len(cells) == len(headers_by_title[title])
+    ]
+    skipped_rows = len(records) - len(stat_records)
+    by_section = Counter(title for title, _, _ in stat_records)
     # BUG-037: read status BY HEADER NAME. cells[-2] lands on a notes fragment when a notes
     # cell holds an unescaped pipe, so the status distribution printed garbage status names.
     by_status = Counter(
         cell_at_field(cells, headers_by_title.get(title, []), "status", locale, fallback=-2)
-        for title, _, cells in records
+        for title, _, cells in stat_records
         if len(cells) >= 2
     )
     m = T[locale.name]
-    print(m["by_section"])
-    for title, count in by_section.items():
-        print(f"- {title}: {count}")
+
+    if decision.conflict and policy is SummaryPolicy.AUTO:
+        # Read-only auto view of an ambiguous file: show both calibers instead of
+        # silently picking one, plus the hint for an explicit --policy rewrite.
+        _print_summary_rows_block(m["by_prefix"], decision.prefix_rows, locale.name)
+        _print_summary_rows_block(m["by_section"], decision.section_rows, locale.name)
+        print(m["summary_policy_conflict"])
+        if decision.matches_existing is SummaryPolicy.BY_PREFIX:
+            print(m["summary_policy_match_prefix"])
+        elif decision.matches_existing is SummaryPolicy.BY_SECTION:
+            print(m["summary_policy_match_section"])
+        else:
+            print(m["summary_policy_no_match"])
+        print(m["summary_policy_hint"])
+    elif policy is SummaryPolicy.BY_PREFIX:
+        counts = {title: total for title, total, _, _ in decision.rows}
+        print(m["by_prefix"])
+        for title, count in counts.items():
+            print(f"- {title}: {count}")
+    else:
+        print(m["by_section"])
+        for title, count in by_section.items():
+            print(f"- {title}: {count}")
     print(m["by_status"])
     for status, count in by_status.items():
         print(f"- {status}: {count}")
-    print(m["total_count"].format(len(records)))
+    print(m["total_count"].format(len(stat_records)))
+    if skipped_rows:
+        print(m["summary_skipped_col_mismatch"].format(skipped_rows))
     return 0
 
 def command_standardize(args: argparse.Namespace) -> int:
@@ -954,7 +1052,7 @@ def command_archive(args: argparse.Namespace) -> int:
         final_archive = archive_body
 
     # Keep an existing 统计摘要 in step with the records left in the main file.
-    main_text, synced = maybe_sync_summary(main_text, locale, True)
+    main_text, synced, _stale_summary = maybe_sync_summary(main_text, locale, True, baseline=text)
 
     commit_all([(archive_path, final_archive), (path, main_text)])
     print(T[locale.name]["archive_moved"].format(moved, archive_path))
@@ -962,11 +1060,29 @@ def command_archive(args: argparse.Namespace) -> int:
         print(T[locale.name]["summary_synced"])
     return 0
 
-def maybe_sync_summary(text: str, locale: Locale, enabled: bool) -> tuple[str, bool]:
-    """Recompute 统计摘要 when the section already exists. Never creates it."""
-    if not enabled or not has_summary_section(text, locale):
-        return text, False
-    return update_summary_text(text, locale), True
+def maybe_sync_summary(
+    text: str, locale: Locale, enabled: bool, baseline: str | None = None
+) -> tuple[str, bool, bool]:
+    """Recompute 统计摘要 when the section already exists. Never creates it.
+
+    Returns (text, synced, stale_summary). When the by-prefix and by-section calibers
+    disagree and the written summary does not already match the by-section numbers,
+    the sync is skipped (REQ-07/§5.2: never re-bucket an ambiguous summary silently)
+    and stale_summary=True tells the caller to filter summary-drift issues from the
+    post-write check so the append itself is not rolled back.
+
+    BUG-073: the caliber judgment must run on `baseline` (the text BEFORE this write).
+    On the post-write text the old summary numbers match neither caliber, so a file
+    whose summary is legitimately by-section would be misjudged as ambiguous and the
+    sync wrongly skipped. When baseline is omitted the post-write text is used.
+    """
+    caliber_text = text if baseline is None else baseline
+    if not enabled or not has_summary_section(caliber_text, locale):
+        return text, False, False
+    if summary_sync_would_change_caliber(caliber_text, locale):
+        print(T[locale.name]["summary_sync_skipped_conflict"], file=sys.stderr)
+        return text, False, True
+    return update_summary_text(text, locale), True, False
 
 def sibling_archive_texts(main_path: Path) -> list[str]:
     """Load sibling Markdown files whose names look like archives (ID high-water source).
@@ -1271,6 +1387,12 @@ def build_parser() -> argparse.ArgumentParser:
     summary.add_argument("--file", default="task-list.md", help="目标 task-list.md")
     summary.add_argument("--write", action="store_true", help="按当前记录重算并回写统计摘要表")
     summary.add_argument("--dry-run", action="store_true", help="配合 --write 时只打印结果，不写文件")
+    summary.add_argument(
+        "--policy",
+        choices=["auto", "by-section", "by-prefix"],
+        default="auto",
+        help="统计口径：auto 两种口径一致才写入（冲突时拒绝并报告双口径）、by-section 按物理分区、by-prefix 按 ID 前缀",
+    )
     summary.set_defaults(func=command_summary)
 
     standardize = sub.add_parser("standardize", help="诊断并可选规范化已有 task-list.md")

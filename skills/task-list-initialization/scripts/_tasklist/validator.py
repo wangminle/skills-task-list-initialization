@@ -14,7 +14,17 @@ from .maintenance import detect_maintenance_rule, render_maintenance_lines
 from .parser import _fenced_code_mask, _has_unclosed_backticks, _heading_title, _is_separator_row, _is_table_line, _looks_like_id, _looks_like_separator_attempt, _text_outside_backticks, collect_records, parse_sections, section_headers_by_title, split_cells
 from .renderer import DANGEROUS_HTML_TAG_RE, _intra_table_blank_gaps, find_intra_table_blank_candidates, find_pipe_escape_candidates
 from .schemas import _is_valid_time, _parse_task_time, _single_date_slot_name, cell_at_field, detect_schema, expected_sections, header_field_index, infer_profile, local_minute_now, missing_sections_for_profile, profile_rank, section_for_title, suggest_status, target_profile, time_column_indices, to_single_date_columns
-from .summary import _compute_rate, _format_rate, compute_summary_rows, has_summary_section, parse_summary_fields
+from .summary import (
+    SummaryPolicy,
+    _ID_PREFIX_RE,
+    _compute_rate,
+    _format_rate,
+    compute_summary_rows,
+    compute_summary_rows_by_prefix,
+    has_summary_section,
+    parse_summary_fields,
+    written_summary_caliber,
+)
 
 def preview_safety_issues(text: str, locale: Locale) -> list[str]:
     """Flag GFM-preview breakers that parse_sections silently skips or cannot see."""
@@ -219,7 +229,12 @@ def summary_drift_issues(text: str, locale: Locale) -> list[str]:
     written = parse_summary_fields(text, locale)
     if not written:
         return []
+    # BUG-069: judge drift against the caliber the written table actually matches —
+    # a summary produced by `summary --write --policy by-prefix` is legitimate, so
+    # comparing it against by-section numbers would flag the tool's own output.
     actual_rows = compute_summary_rows(text, locale)
+    if written_summary_caliber(text, locale) is SummaryPolicy.BY_PREFIX:
+        actual_rows = compute_summary_rows_by_prefix(text, locale)
     actual_map = {title: (total, done, pending) for title, total, done, pending in actual_rows}
     actual_total = sum(t for t, _, _ in actual_map.values())
     actual_done = sum(d for _, d, _ in actual_map.values())
@@ -279,16 +294,26 @@ def summary_drift_issues(text: str, locale: Locale) -> list[str]:
 def prefix_mismatches(
     records: list[tuple[str, int, list[str]]], locale: Locale
 ) -> list[str]:
+    # A prefix no registry section owns is not misplacement: the by-prefix summary
+    # caliber counts such records under their physical section, so warning here would
+    # contradict it (check says misplaced, summary says in place). Only warn when the
+    # record's prefix is a known one owned by a different section (BUG-075).
+    known_prefixes = {s.prefix for s in locale.all_sections() if s.prefix}
     issues: list[str] = []
     for title, line_no, cells in records:
         section = section_for_title(title, locale)
         if not section or not section.prefix:
             continue
         item_id = cells[0]
-        if not item_id.startswith(f"{section.prefix}-"):
-            issues.append(
-                T[locale.name]["prefix_mismatch"].format(line_no, item_id, title, section.prefix)
-            )
+        match = _ID_PREFIX_RE.match(item_id.strip()) if item_id.strip() else None
+        record_prefix = match.group(1) if match else None
+        if record_prefix is None or record_prefix not in known_prefixes:
+            continue
+        if item_id.startswith(f"{section.prefix}-"):
+            continue
+        issues.append(
+            T[locale.name]["prefix_mismatch"].format(line_no, item_id, title, section.prefix)
+        )
     return issues
 
 def record_quality_warnings(

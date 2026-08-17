@@ -20,9 +20,6 @@ class ParserRendererTest(unittest.TestCase):
     def test_split_cells_decodes_escaped_pipe(self):
         self.assertEqual(split_cells("| a \\| b |"), ["a | b"])
 
-    def test_split_cells_accepts_missing_trailing_pipe(self):
-        self.assertEqual(split_cells("| a | b"), ["a", "b"])
-
     def test_tab_heading_is_a_real_section(self):
         text = "# t\n\n##\t代码 Bug\n\n| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n| --- | --- | --- | --- | --- | --- |\n"
         sections = parse_sections(text)

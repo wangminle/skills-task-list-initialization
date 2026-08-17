@@ -5,7 +5,7 @@ description: Use when creating, standardizing, migrating, validating, or maintai
 
 # Task List Initialization
 
-> Skill version **V0.3.4**. Canonical string: repo root `VERSION`.
+> Skill version **V0.3.5**. Canonical string: repo root `VERSION`.
 
 ## Overview
 
@@ -157,12 +157,12 @@ python3 "$SKILL_CLI" standardize --file task-list.md --migrate-schema --apply-sa
 python3 "$SKILL_CLI" archive --file task-list.md --older-than-days 90
 ```
 
-`init --lang {zh,en}` selects the template language (`zh` = Simplified Chinese, default; `en` = English). The other subcommands auto-detect the language from the target file. `check`/`standardize` accept `--schema {auto,dual,single}` (default `auto`) to validate a file that keeps the legacy single-date schema. `add` auto-matches the target section's schema and emits the corresponding column count, so no flag is needed. A file that mixes dual-date and single-date sections is valid in `--schema auto` (each section is checked against its own header). `check` also flags malformed IDs (e.g. `bug-001`, `BUG-12`) in the first column rather than silently skipping them, validates timestamps, reports dangling `[[ID]]` refs, suggests nearest standard statuses for non-standard values, and **fails on preview-breaking markup**: blank lines between table rows (fenced code examples are ignored), raw flow-breaking HTML tags in cells, unclosed CommonMark code spans on a data row, and GFM-invalid table separators. Heading scans for `add` / `summary --write` / `--migrate-schema` / `--apply-safe-fixes` / duplicate-section detection skip fenced code blocks so Markdown table *examples* cannot hijack real tables. `add` refuses to write into a section whose header does not match a recognized schema (e.g. a reordered `ID / 状态 / 动作 / …`) instead of guessing the column layout — fix the header manually. `--migrate-schema` only upgrades supported 6/8-col single-date legacy schemas; it will refuse a reordered dual-date header rather than shift field meanings. `add`/`update` wrap blacklisted raw HTML tags (such as `<title>`) as inline code on write; `--from-json` requires string fields (lists/dicts are rejected).
+`init --lang {zh,en}` selects the template language (`zh` = Simplified Chinese, default; `en` = English). The other subcommands auto-detect the language from the target file. `check`/`standardize` accept `--schema {auto,dual,single}` (default `auto`) to validate a file that keeps the legacy single-date schema. `add` auto-matches the target section's schema and emits the corresponding column count, so no flag is needed. A file that mixes dual-date and single-date sections is valid in `--schema auto` (each section is checked against its own header). `check` also flags malformed IDs (e.g. `bug-001`, `BUG-12`) in the first column rather than silently skipping them, validates timestamps, reports dangling `[[ID]]` refs, suggests nearest standard statuses for non-standard values, and **fails on preview-breaking markup**: blank lines between table rows (fenced code examples are ignored), raw flow-breaking HTML tags in cells, unclosed CommonMark code spans on a data row, and GFM-invalid table separators. Heading scans for `add` / `summary --write` / `--migrate-schema` / `--apply-safe-fixes` / duplicate-section detection skip fenced code blocks so Markdown table *examples* cannot hijack real tables. `add` refuses to write into a section whose header does not match a recognized schema (e.g. a reordered `ID / 状态 / 动作 / …`) instead of guessing the column layout — fix the header manually. `--migrate-schema` only upgrades supported 6/8-col single-date legacy schemas; it will refuse a reordered dual-date header rather than shift field meanings. `add`/`update` wrap blacklisted raw HTML tags (such as `<title>`) as inline code on write; `--from-json` requires string fields (lists/dicts are rejected). `check` also prints **prefix-misplacement warnings** - a record whose ID prefix does not match its physical section (e.g. `DEV-074` under 检查事项, which expects `CHK-`) - as warnings: exit code stays 0, records are never auto-moved; reclassify manually after confirmation.
 
 **Write-path ergonomics:**
 
 - `add` / `update` run a structural `check` after writing by default; on failure they roll back the write and exit non-zero. Pass `--no-check` only when you intentionally need to write into an already-invalid file.
-- When the file already has a `统计摘要` / `Summary` section, `add` / `update` recompute it by default (`--no-sync-summary` to skip). `check` reports stale summary totals (摘要表过期).
+- When the file already has a `统计摘要` / `Summary` section, `add` / `update` recompute it by default (`--no-sync-summary` to skip). If the by-prefix and by-section calibers disagree (misplaced rows), the recompute is **skipped with a warning** instead of silently re-bucketing the summary; run `summary --policy by-prefix|by-section` to recompute explicitly. `check` reports stale summary totals (摘要表过期).
 - Prefer `--notes-file` / `--description-file` (or `-` for stdin) for long Chinese text with quotes, semicolons, or pipes — avoids shell escaping. `--from-json` accepts a JSON array/object (or stdin via `-`) for batch adds and the same escaping safety.
 - `update --id …` patches fields in place (`--status`, `--notes` / `--notes-append`, `--completed-time`, …). It does **not** renumber IDs — use an `ADJ-` mapping record for ID corrections.
 - `sections` lists headings; `list` filters by `--id` / `--status` / `--section` / `--keyword`. Section aliases include ID prefixes (`CHK`, `ADJ`, …) and short Chinese names (`检查`, `调整`, …).
@@ -172,7 +172,7 @@ python3 "$SKILL_CLI" archive --file task-list.md --older-than-days 90
 
 Run `--help` for all options. Prefer CLI generation for new files, then review the result manually for project-specific wording.
 
-`summary --write` recomputes the `统计摘要` table from current records (total / completed / pending / completion rate) and writes it back, appending the section if it does not exist yet. Use `--dry-run` to preview without writing.
+`summary --write` recomputes the `统计摘要` table from current records (total / completed / pending / completion rate) and writes it back, appending the section if it does not exist yet. `--policy auto|by-section|by-prefix` (default `auto`) picks the counting caliber: when a record's ID prefix doesn't match its physical section, the by-prefix and by-section counts disagree, and `auto` then **refuses to write** (non-zero exit, file unchanged) while printing both counts plus which one the file's existing summary matches. Choose `--policy by-prefix` to keep prefix-caliber summaries (typical for historical ledgers) or `--policy by-section` to switch to physical sections. Width-anomalous rows (cell count differs from the section header, usually an unescaped `|`) are excluded from statistics so cell fragments cannot surface as statuses; the read-only `summary` view reports the excluded-row count. Use `--dry-run` to preview without writing.
 
 ## References
 
@@ -180,4 +180,4 @@ Run `--help` for all options. Prefer CLI generation for new files, then review t
 - `references/task-list-template.md`: canonical Markdown templates for each profile.
 - `references/maintenance-rule.md`: canonical maintenance-rule text (Chinese and English), file-selection logic, language-matching guidance, and optional `Stop`-hook guarantee layer for installing into a project's `CLAUDE.md`/`AGENTS.md`.
 - `evals/evals.json`: skill-creator evaluation cases.
-- Repo root `VERSION`: current skill version string (`V0.3.4`).
+- Repo root `VERSION`: current skill version string (`V0.3.5`).

@@ -1,13 +1,13 @@
 # Task List Initialization · 任务清单初始化
 
-**Version:** `V0.3.4`
+**Version:** `V0.3.5`
 
 **[English](#english)** | **[中文](#中文)**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-V0.3.4-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-V0.3.5-blue.svg)](VERSION)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](README.md)
-[![Tests](https://img.shields.io/badge/tests-209%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-232%20passing-brightgreen.svg)](tests/)
 
 ---
 
@@ -33,7 +33,7 @@ Every project accumulates bugs, features, reviews, tests, docs, and ops work. Th
 - **Safe pipe escape + intra-table blanks** — `--apply-safe-fixes` can merge/escape unescaped `|` in overwide rows and delete blank lines between table data rows (**not** inside fenced code blocks).
 - **Wiki cross-refs** — `[[BUG-001]]` syntax with dangling-reference detection in `check`.
 - **Archive** — `archive --older-than-days N` moves old completed rows to `task-list-archive-YYYYMM.md`.
-- **Tested** — 209 unit tests covering layered domain/parser/validator/maintenance modules plus init, add, update, list, sections, from-json, notes-file, auto-check rollback, check, summary, standardize, archive, install-maintenance (including CLAUDE_PROJECT_DIR Stop-hook path + legacy relative-path upgrade), aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, maintenance-rule detection (including per-tool claim mismatch, rule duplication, non-portable hook paths, `.claude/` gitignore), schema-variant detection, timestamp validation, invalid-ID detection, non-standard-header rejection, archive ID non-reuse, pipe escape, wiki refs, status suggestions, case-insensitive section resolution, English locale, summary drift four-field comparison, rate precision cap, time-reverse detection, ID-order regression detection, duplicate-record detection, Codex hook path validation, section-order recommendations, and **preview-safety** (intra-table blanks, fenced-code exclusion, raw HTML including iframe, CommonMark backtick pairing). Heading scans on write/migrate/check skip fenced examples; mixed dual+single files pass `--schema auto`.
+- **Tested** — 232 unit tests covering layered domain/parser/validator/maintenance modules plus init, add, update, list, sections, from-json, notes-file, auto-check rollback, check, summary, standardize, archive, install-maintenance (including CLAUDE_PROJECT_DIR Stop-hook path + legacy relative-path upgrade), aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, maintenance-rule detection (including per-tool claim mismatch, rule duplication, non-portable hook paths, `.claude/` gitignore), schema-variant detection, timestamp validation, invalid-ID detection, non-standard-header rejection, archive ID non-reuse, pipe escape, wiki refs, status suggestions, case-insensitive section resolution, English locale, summary drift four-field comparison, summary caliber policy (auto refuses to write on prefix/section conflicts), check prefix-misplacement warnings, width-anomalous-row exclusion from statistics, rate precision cap, time-reverse detection, ID-order regression detection, duplicate-record detection, Codex hook path validation, section-order recommendations, and **preview-safety** (intra-table blanks, fenced-code exclusion, raw HTML including iframe, CommonMark backtick pairing). Heading scans on write/migrate/check skip fenced examples; mixed dual+single files pass `--schema auto`.
 
 ### The Task List Standard
 
@@ -140,7 +140,7 @@ python3 "$SKILL_CLI" standardize \
   --file task-list.md --report task-list-standardize-report.md
 ```
 
-`init --lang {zh,en}` selects the language (`zh` = Simplified Chinese, default; `en` = English). `add`/`update`/`check`/`summary`/`standardize` auto-detect the language from the target file, so no `--lang` is needed for them. `add`/`update` auto-run `check` after writing (rollback on failure; `--no-check` to skip). `check`/`standardize` accept `--schema {auto,dual,single}` (default `auto`) to validate a file that intentionally keeps a compatible single-date schema (`Done Date` / `完成日期`, `Found Date` / `发现日期`, etc.). `add` also matches the target section's recognized schema and emits the corresponding column count. `check` flags malformed IDs (`bug-001`) and invalid timestamps; `add` refuses a section whose header does not match a recognized schema (e.g. reordered columns) rather than guessing — fix the header manually. Use `--migrate-schema` for losslessly-migrateable 6/8-col single-date headers (`Found Date` / `Done Date`). `summary --write` aggregates by **physical section**, not ID prefix; if a historical file counted by prefix and has misplaced rows, review before rewriting. Run `--help` on any subcommand for the full option list.
+`init --lang {zh,en}` selects the language (`zh` = Simplified Chinese, default; `en` = English). `add`/`update`/`check`/`summary`/`standardize` auto-detect the language from the target file, so no `--lang` is needed for them. `add`/`update` auto-run `check` after writing (rollback on failure; `--no-check` to skip). `check`/`standardize` accept `--schema {auto,dual,single}` (default `auto`) to validate a file that intentionally keeps a compatible single-date schema (`Done Date` / `完成日期`, `Found Date` / `发现日期`, etc.). `add` also matches the target section's recognized schema and emits the corresponding column count. `check` flags malformed IDs (`bug-001`) and invalid timestamps; `add` refuses a section whose header does not match a recognized schema (e.g. reordered columns) rather than guessing — fix the header manually. Use `--migrate-schema` for losslessly-migrateable 6/8-col single-date headers (`Found Date` / `Done Date`). `summary --write` honors `--policy auto|by-section|by-prefix` (default `auto`): when the by-section and by-prefix calibers disagree (misplaced rows), `auto` **refuses to write** (non-zero exit, file unchanged) and prints both counts — pass `--policy by-prefix` to keep prefix-caliber summaries or `--policy by-section` to switch to physical sections. `check` also prints prefix-misplacement warnings (warning-level: exit code unchanged, records never auto-moved), and statistics exclude width-anomalous rows (usually an unescaped `|`); the read-only `summary` view reports the excluded-row count. Run `--help` on any subcommand for the full option list.
 
 ### Profiles
 
@@ -172,16 +172,16 @@ A project may legitimately keep a **compatible single-date schema** (`Done Date`
 ### Testing
 
 ```bash
-python3 -m unittest discover -s tests -p 'test_*.py'
+python3 -m unittest discover -s tests/scripts -p 'test_*.py'
 ```
 
-209 tests, all passing.
+232 tests, all passing.
 
 ### Project Structure
 
 ```
 skills-task-list-initialization/
-├── VERSION                                   # V0.3.4
+├── VERSION                                   # V0.3.5
 ├── skills/task-list-initialization/
 │   ├── SKILL.md                              # Skill definition
 │   ├── evals/
@@ -194,8 +194,9 @@ skills-task-list-initialization/
 │       ├── task_list_cli.py                  # CLI entry (re-exports public_api)
 │       └── _tasklist/                        # Implementation package (cli/parser/validator/locales/public_api/…)
 ├── tests/
-│   ├── helpers.py                            # Shared CLI test helpers
-│   └── test_*.py                             # Unit tests (209; no file over 600 lines)
+│   └── scripts/                               # Test suite (all test_*.py + shared helpers)
+│       ├── helpers.py                         # Shared CLI test helpers
+│       └── test_*.py                          # Unit tests (232; no file over 600 lines)
 ├── LICENSE                                   # MIT
 └── README.md
 ```
@@ -205,6 +206,13 @@ skills-task-list-initialization/
 [MIT](LICENSE) © 2026 fenix-wangminle.
 
 ### Changelog
+
+#### V0.3.5
+
+- `summary --policy auto|by-section|by-prefix` (default `auto`): with misplaced rows (ID prefix vs physical section) the two calibers disagree and `auto` **refuses to write** (non-zero exit, file unchanged), printing both counts plus which caliber the existing summary matches; `add` / `update` skip the summary auto-sync with a warning instead of silently re-bucketing
+- `check` prints prefix-misplacement warnings (line, ID, section, expected prefix); warnings do not fail the gate and records are never auto-moved
+- Statistics exclude width-anomalous rows (cell count vs header count, usually an unescaped `|`): cell fragments no longer surface as status names and totals no longer count broken rows; the read-only `summary` view reports the excluded-row count
+- `ruff check` clean on scripts and tests; **232** unit tests
 
 #### V0.3.4
 
@@ -272,7 +280,7 @@ skills-task-list-initialization/
 - **自动转义 `|` 与表内空行**——`--apply-safe-fixes` 可合并并转义导致列数错乱的未转义 `|`，并删除数据行之间的空行（**不改围栏代码块**）。
 - **条目互引**——`[[BUG-001]]` 语法，`check` 检测悬空引用。
 - **归档**——`archive --older-than-days N` 将旧的已完成记录移到 `task-list-archive-YYYYMM.md`。
-- **经过测试**——209 个单元测试，覆盖分层 domain/parser/validator/maintenance 模块以及 init、add、update、list、sections、from-json、notes-file、写后校验回滚、check、summary、standardize、archive、install-maintenance（含 `CLAUDE_PROJECT_DIR` Stop hook 路径与旧相对路径升级）、分区别名与反向别名、标题空白容错、`--fix-only` 语义、维护规则声明一致性（按工具拆分、规则双写、非便携 hook、`.claude/` gitignore）与跨文件幂等、schema 变体检测、时间戳校验、非法 ID 检出、非标准表头拒绝、归档后 ID 不复用、管道符转义、互引检测、状态建议映射、分区大小写不敏感解析与英文 locale、摘要漂移四字段比较、完成率精度上限、时间倒置检测、ID 行序回退检测、重复记录检测、Codex hook 路径校验、章节顺序建议，以及**预览安全**（表内空行、围栏代码排除、含 iframe 的裸 HTML、CommonMark 反引号配对）。写入/迁移/check 的标题扫描会跳过围栏内示例；混合 dual+single 文件在 `--schema auto` 下通过。
+- **经过测试**——232 个单元测试，覆盖分层 domain/parser/validator/maintenance 模块以及 init、add、update、list、sections、from-json、notes-file、写后校验回滚、check、summary、standardize、archive、install-maintenance（含 `CLAUDE_PROJECT_DIR` Stop hook 路径与旧相对路径升级）、分区别名与反向别名、标题空白容错、`--fix-only` 语义、维护规则声明一致性（按工具拆分、规则双写、非便携 hook、`.claude/` gitignore）与跨文件幂等、schema 变体检测、时间戳校验、非法 ID 检出、非标准表头拒绝、归档后 ID 不复用、管道符转义、互引检测、状态建议映射、分区大小写不敏感解析与英文 locale、摘要漂移四字段比较、摘要双口径策略（前缀/分区冲突时 auto 拒绝写入）、check 前缀错位警告、列宽异常行统计排除、完成率精度上限、时间倒置检测、ID 行序回退检测、重复记录检测、Codex hook 路径校验、章节顺序建议，以及**预览安全**（表内空行、围栏代码排除、含 iframe 的裸 HTML、CommonMark 反引号配对）。写入/迁移/check 的标题扫描会跳过围栏内示例；混合 dual+single 文件在 `--schema auto` 下通过。
 
 ### 任务清单标准
 
@@ -377,7 +385,7 @@ python3 "$SKILL_CLI" standardize \
   --file task-list.md --report task-list-standardize-report.md
 ```
 
-`init --lang {zh,en}` 选择语言（`zh` 中文简体，默认；`en` 英文）。`add`/`update`/`check`/`summary`/`standardize` 按目标文件自动检测语言，无需传 `--lang`。`add`/`update` 写后默认自动 `check`（失败回滚；`--no-check` 可跳过）。`check`/`standardize` 支持 `--schema {auto,dual,single}`（默认 `auto`），对刻意保留兼容单日期 schema（`完成日期` / `发现日期` 等）的文件按此校验。`add` 会按目标分区已识别的 schema 自动输出对应列数。`check` 检出非法 ID（`bug-001`）与非法时间戳；`add` 遇到表头不符合已识别 schema 的分区（如列顺序错位）会拒绝写入而非猜测——请手工修正表头。对可无损迁移的 6/8 列单日期表头（`发现日期` / `完成日期`）使用 `--migrate-schema`。`summary --write` 按**物理章节**汇总，不是按 ID 前缀；若历史文件原先按前缀统计且存在错放记录，回写前请先核对。运行各子命令的 `--help` 查看完整参数。
+`init --lang {zh,en}` 选择语言（`zh` 中文简体，默认；`en` 英文）。`add`/`update`/`check`/`summary`/`standardize` 按目标文件自动检测语言，无需传 `--lang`。`add`/`update` 写后默认自动 `check`（失败回滚；`--no-check` 可跳过）。`check`/`standardize` 支持 `--schema {auto,dual,single}`（默认 `auto`），对刻意保留兼容单日期 schema（`完成日期` / `发现日期` 等）的文件按此校验。`add` 会按目标分区已识别的 schema 自动输出对应列数。`check` 检出非法 ID（`bug-001`）与非法时间戳；`add` 遇到表头不符合已识别 schema 的分区（如列顺序错位）会拒绝写入而非猜测——请手工修正表头。对可无损迁移的 6/8 列单日期表头（`发现日期` / `完成日期`）使用 `--migrate-schema`。`summary --write` 支持 `--policy auto|by-section|by-prefix`（默认 `auto`）：按前缀与按分区两种口径不一致（存在错放记录）时，`auto` **拒绝写入**（非零退出、文件不变）并打印双口径对比——用 `--policy by-prefix` 保持按前缀统计，或 `--policy by-section` 改按物理分区。`check` 另输出前缀错位警告（警告级：不改变退出码、不自动移动记录）；统计排除列宽与表头不符的行（多为未转义 `|`），只读 `summary` 会提示排除行数。运行各子命令的 `--help` 查看完整参数。
 
 ### 模板类型
 
@@ -409,16 +417,16 @@ python3 "$SKILL_CLI" standardize \
 ### 测试
 
 ```bash
-python3 -m unittest discover -s tests -p 'test_*.py'
+python3 -m unittest discover -s tests/scripts -p 'test_*.py'
 ```
 
-209 个测试，全部通过。
+232 个测试，全部通过。
 
 ### 项目结构
 
 ```
 skills-task-list-initialization/
-├── VERSION                                   # V0.3.4
+├── VERSION                                   # V0.3.5
 ├── skills/task-list-initialization/
 │   ├── SKILL.md                              # 技能定义
 │   ├── evals/
@@ -431,8 +439,9 @@ skills-task-list-initialization/
 │       ├── task_list_cli.py                  # CLI 入口（再导出）
 │       └── _tasklist/                        # 实现包（cli/parser/validator/locales/…）
 ├── tests/
-│   ├── helpers.py                            # 测试公共助手
-│   └── test_*.py                             # 单元测试（209；单文件不超过 600 行）
+│   └── scripts/                               # 测试套件（全部 test_*.py 与公共助手）
+│       ├── helpers.py                         # 测试公共助手
+│       └── test_*.py                          # 单元测试（232；单文件不超过 600 行）
 ├── LICENSE                                   # MIT
 └── README.md
 ```
@@ -442,6 +451,13 @@ skills-task-list-initialization/
 [MIT](LICENSE) © 2026 fenix-wangminle。
 
 ### 更新日志
+
+#### V0.3.5
+
+- `summary --policy auto|by-section|by-prefix`（默认 `auto`）：存在错放记录（ID 前缀与物理分区不一致）时两种口径分叉，`auto` **拒绝写入**（非零退出、文件不变）并打印双口径对比与既有摘要匹配的口径；`add` / `update` 摘要自动同步遇口径冲突跳过并告警，不再静默改桶
+- `check` 输出前缀错位警告（行号、ID、所在分区、期望前缀）；警告不导致校验失败，也绝不自动移动记录
+- 统计排除列宽异常行（单元格数与表头列数不符，多为未转义 `|`）：单元格碎片不再混入状态分布、总数不再计入断行；只读 `summary` 视图提示排除行数
+- `ruff check` 清零；**232** 个单元测试
 
 #### V0.3.4
 
@@ -464,7 +480,7 @@ skills-task-list-initialization/
 
 #### V0.3.2
 
-- 摘要漂移校验扩展为四字段比较（总数 / 已完成 / 待处理 / 内部一致性）
+- 摘要漂移校验扩展为四字段比较（总数 / 已完成 / 待开发/待修复 / 内部一致性），并按文件实际口径（by-prefix / by-section）核算
 - 完成率精度修复：1 位小数，有未完成时上限 99.9%（不再假报 100%）
 - Codex `.codex/hooks.json` Stop hook 检测，含脚本路径存在性校验
 - 质量告警：时间倒置（完成 < 发现）、分区内 ID 行序回退、精确重复记录（排除 ID 列）

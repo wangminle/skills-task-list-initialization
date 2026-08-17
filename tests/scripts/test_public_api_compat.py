@@ -63,7 +63,7 @@ class TestPublicApiCompat(unittest.TestCase):
 
     def test_from_task_list_cli_import_detect_locale(self):
         """Regression: ``from task_list_cli import detect_locale`` must succeed."""
-        scripts = Path(__file__).resolve().parents[1] / (
+        scripts = Path(__file__).resolve().parents[2] / (
             "skills/task-list-initialization/scripts"
         )
         sys.path.insert(0, str(scripts))

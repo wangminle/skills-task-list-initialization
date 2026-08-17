@@ -183,19 +183,26 @@ class CliBugs1Test(CliTestCase):
             self.assertIn("BUG-001", result.stdout)
 
     def test_bug037b_summary_status_by_header_index(self):
-        # summary must read the status by header name, not cells[-2].
+        # summary must read the status by header name, not cells[-2] (BUG-037). Since
+        # REQ-06 the unescaped-pipe row is a width anomaly and must be EXCLUDED from
+        # statistics outright instead of being counted with fragment-based field reads;
+        # the header-name read still shows on the well-formed row.
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "task-list.md"
             target.write_text(
                 "# 任务跟踪列表\n\n## 代码 Bug\n\n"
                 "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
                 "| --- | --- | --- | --- | --- | --- | --- |\n"
-                "| BUG-001 | 检查 | x | 2026-08-01 00:00 | - | 待办 | note with | pipe |\n",
+                "| BUG-001 | 检查 | x | 2026-08-01 00:00 | - | 待办 | ok |\n"
+                "| BUG-002 | 检查 | y | 2026-08-02 00:00 | - | 待办 | note with | pipe |\n",
                 encoding="utf-8",
             )
             result = self.run_cli("summary", "--file", str(target))
             self.assertIn("待办", result.stdout)
             self.assertNotIn("note with", result.stdout)
+            # REQ-06: the broken row is excluded, not miscounted.
+            self.assertIn("总计：1", result.stdout)
+            self.assertIn("1 行因列数与表头不符未参与统计", result.stdout)
 
     def test_bug038_missing_file_gives_clean_error(self):
         # All commands must report a localized file-not-found instead of a traceback.
