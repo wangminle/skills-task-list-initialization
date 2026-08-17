@@ -531,3 +531,33 @@ class CliBugs1Test(CliTestCase):
             text = target.read_text(encoding="utf-8")
             self.assertIn("| BUG-002 | 修复 | dated | 2026-06-01 12:00 | 待修复 |", text)
             self.assertNotIn("| BUG-002 | 修复 | dated | 2026-08-", text)
+
+    def test_bug085_file_options_missing_give_clean_error(self):
+        # BUG-085: --description-file / --notes-file with a missing path used to leak
+        # a raw FileNotFoundError traceback; they must follow read_task_list's
+        # localized single-line contract (BUG-028/038 class) with exit code 1.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | a | 2026-01-01 10:00 | - | 待修复 | - |\n",
+                encoding="utf-8",
+            )
+            missing = str(Path(tmp) / "nope.txt")
+            r1 = self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description-file", missing, "--status", "待修复",
+                check=False,
+            )
+            self.assertEqual(r1.returncode, 1)
+            self.assertNotIn("Traceback", r1.stderr)
+            self.assertIn("文件不存在", r1.stderr)
+            r2 = self.run_cli(
+                "update", "--file", str(target), "--id", "BUG-001",
+                "--notes-file", missing, check=False,
+            )
+            self.assertEqual(r2.returncode, 1)
+            self.assertNotIn("Traceback", r2.stderr)
+            self.assertIn("文件不存在", r2.stderr)

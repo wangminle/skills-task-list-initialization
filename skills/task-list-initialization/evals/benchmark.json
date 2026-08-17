@@ -1,0 +1,284 @@
+{
+  "skill_name": "task-list-initialization",
+  "generated_at": "2026-08-17T20:02:54",
+  "runs_per_configuration": 3,
+  "harness": "claude-cli headless (-p --output-format stream-json)",
+  "configurations": [
+    {
+      "name": "eval1-baseline",
+      "runs": [
+        {
+          "run_number": 1,
+          "model": "deepseek-v4-flash",
+          "input_tokens": 12043,
+          "output_tokens": 2115,
+          "tokens": 14158,
+          "tool_calls": 8,
+          "duration_s": 77.3,
+          "cost_usd": 0.21905999999999998,
+          "is_error": false,
+          "task_success": true,
+          "workspace": "skills/task-list-initialization/evals/workspace/runs/eval1-baseline/eval1-run1"
+        },
+        {
+          "run_number": 2,
+          "model": "deepseek-v4-flash",
+          "input_tokens": 4848,
+          "output_tokens": 1921,
+          "tokens": 6769,
+          "tool_calls": 7,
+          "duration_s": 61.8,
+          "cost_usd": 0.160074,
+          "is_error": false,
+          "task_success": true,
+          "workspace": "skills/task-list-initialization/evals/workspace/runs/eval1-baseline/eval1-run2"
+        },
+        {
+          "run_number": 3,
+          "model": "deepseek-v4-flash",
+          "input_tokens": 8590,
+          "output_tokens": 1147,
+          "tokens": 9737,
+          "tool_calls": 4,
+          "duration_s": 36.9,
+          "cost_usd": 0.143565,
+          "is_error": false,
+          "task_success": true,
+          "workspace": "skills/task-list-initialization/evals/workspace/runs/eval1-baseline/eval1-run3"
+        }
+      ],
+      "task_success_rate": 1.0,
+      "median_duration_s": 61.8
+    },
+    {
+      "name": "eval1-with_skill",
+      "runs": [
+        {
+          "run_number": 1,
+          "model": "deepseek-v4-flash",
+          "input_tokens": 10630,
+          "output_tokens": 1245,
+          "tokens": 11875,
+          "tool_calls": 7,
+          "duration_s": 49.3,
+          "cost_usd": 0.17019299999999998,
+          "is_error": false,
+          "task_success": true,
+          "workspace": "skills/task-list-initialization/evals/workspace/runs/eval1-with_skill/eval1-run1"
+        },
+        {
+          "run_number": 2,
+          "model": "deepseek-v4-flash",
+          "input_tokens": 10391,
+          "output_tokens": 1613,
+          "tokens": 12004,
+          "tool_calls": 6,
+          "duration_s": 45.3,
+          "cost_usd": 0.17763299999999999,
+          "is_error": false,
+          "task_success": true,
+          "workspace": "skills/task-list-initialization/evals/workspace/runs/eval1-with_skill/eval1-run2"
+        },
+        {
+          "run_number": 3,
+          "model": "deepseek-v4-flash",
+          "input_tokens": 10381,
+          "output_tokens": 1546,
+          "tokens": 11927,
+          "tool_calls": 5,
+          "duration_s": 44.7,
+          "cost_usd": 0.164903,
+          "is_error": false,
+          "task_success": true,
+          "workspace": "skills/task-list-initialization/evals/workspace/runs/eval1-with_skill/eval1-run3"
+        }
+      ],
+      "task_success_rate": 1.0,
+      "median_duration_s": 45.3
+    },
+    {
+      "name": "eval3-baseline",
+      "runs": [
+        {
+          "run_number": 1,
+          "model": "deepseek-v4-flash",
+          "input_tokens": 9393,
+          "output_tokens": 2162,
+          "tokens": 11555,
+          "tool_calls": 6,
+          "duration_s": 68.1,
+          "cost_usd": 0.19391999999999998,
+          "is_error": false,
+          "task_success": true,
+          "workspace": "skills/task-list-initialization/evals/workspace/runs/eval3-baseline/eval3-run1"
+        },
+        {
+          "run_number": 2,
+          "model": "deepseek-v4-flash",
+          "input_tokens": 8682,
+          "output_tokens": 2410,
+          "tokens": 11092,
+          "tool_calls": 7,
+          "duration_s": 66.6,
+          "cost_usd": 0.199615,
+          "is_error": false,
+          "task_success": true,
+          "workspace": "skills/task-list-initialization/evals/workspace/runs/eval3-baseline/eval3-run2"
+        },
+        {
+          "run_number": 3,
+          "model": "deepseek-v4-flash",
+          "input_tokens": 3924,
+          "output_tokens": 2045,
+          "tokens": 5969,
+          "tool_calls": 4,
+          "duration_s": 60.4,
+          "cost_usd": 0.126363,
+          "is_error": false,
+          "task_success": true,
+          "workspace": "skills/task-list-initialization/evals/workspace/runs/eval3-baseline/eval3-run3"
+        }
+      ],
+      "task_success_rate": 1.0,
+      "median_duration_s": 66.6
+    },
+    {
+      "name": "eval3-with_skill",
+      "runs": [
+        {
+          "run_number": 1,
+          "model": "deepseek-v4-flash",
+          "input_tokens": 22334,
+          "output_tokens": 3986,
+          "tokens": 26320,
+          "tool_calls": 15,
+          "duration_s": 136.7,
+          "cost_usd": 0.49811000000000005,
+          "is_error": false,
+          "task_success": true,
+          "workspace": "skills/task-list-initialization/evals/workspace/runs/eval3-with_skill/eval3-run1"
+        },
+        {
+          "run_number": 2,
+          "model": "deepseek-v4-flash",
+          "input_tokens": 10834,
+          "output_tokens": 2273,
+          "tokens": 13107,
+          "tool_calls": 7,
+          "duration_s": 72.8,
+          "cost_usd": 0.210372,
+          "is_error": false,
+          "task_success": true,
+          "workspace": "skills/task-list-initialization/evals/workspace/runs/eval3-with_skill/eval3-run2"
+        },
+        {
+          "run_number": 3,
+          "model": "deepseek-v4-flash",
+          "input_tokens": 8687,
+          "output_tokens": 3113,
+          "tokens": 11800,
+          "tool_calls": 8,
+          "duration_s": 87.0,
+          "cost_usd": 0.22984000000000002,
+          "is_error": false,
+          "task_success": true,
+          "workspace": "skills/task-list-initialization/evals/workspace/runs/eval3-with_skill/eval3-run3"
+        }
+      ],
+      "task_success_rate": 1.0,
+      "median_duration_s": 87.0
+    },
+    {
+      "name": "eval5-baseline",
+      "runs": [
+        {
+          "run_number": 1,
+          "model": "deepseek-v4-flash",
+          "input_tokens": 5100,
+          "output_tokens": 1122,
+          "tokens": 6222,
+          "tool_calls": 6,
+          "duration_s": 42.7,
+          "cost_usd": 0.148484,
+          "is_error": false,
+          "task_success": true,
+          "workspace": "skills/task-list-initialization/evals/workspace/runs/eval5-baseline/eval5-run1"
+        },
+        {
+          "run_number": 2,
+          "model": "deepseek-v4-flash",
+          "input_tokens": 5642,
+          "output_tokens": 1105,
+          "tokens": 6747,
+          "tool_calls": 6,
+          "duration_s": 41.8,
+          "cost_usd": 0.152697,
+          "is_error": false,
+          "task_success": true,
+          "workspace": "skills/task-list-initialization/evals/workspace/runs/eval5-baseline/eval5-run2"
+        },
+        {
+          "run_number": 3,
+          "model": "glm-5.3",
+          "input_tokens": 5460,
+          "output_tokens": 1400,
+          "tokens": 6860,
+          "tool_calls": 5,
+          "duration_s": 39.8,
+          "cost_usd": 0.144537,
+          "is_error": false,
+          "task_success": true,
+          "workspace": "skills/task-list-initialization/evals/workspace/runs/eval5-baseline/eval5-run3"
+        }
+      ],
+      "task_success_rate": 1.0,
+      "median_duration_s": 41.8
+    },
+    {
+      "name": "eval5-with_skill",
+      "runs": [
+        {
+          "run_number": 1,
+          "model": "glm-5.3",
+          "input_tokens": 5582,
+          "output_tokens": 1871,
+          "tokens": 7453,
+          "tool_calls": 6,
+          "duration_s": 53.1,
+          "cost_usd": 0.16854800000000003,
+          "is_error": false,
+          "task_success": true,
+          "workspace": "skills/task-list-initialization/evals/workspace/runs/eval5-with_skill/eval5-run1"
+        },
+        {
+          "run_number": 2,
+          "model": "deepseek-v4-flash",
+          "input_tokens": 5641,
+          "output_tokens": 1341,
+          "tokens": 6982,
+          "tool_calls": 7,
+          "duration_s": 41.5,
+          "cost_usd": 0.159881,
+          "is_error": false,
+          "task_success": true,
+          "workspace": "skills/task-list-initialization/evals/workspace/runs/eval5-with_skill/eval5-run2"
+        },
+        {
+          "run_number": 3,
+          "model": "deepseek-v4-flash",
+          "input_tokens": 4722,
+          "output_tokens": 1076,
+          "tokens": 5798,
+          "tool_calls": 5,
+          "duration_s": 30.9,
+          "cost_usd": 0.13034600000000002,
+          "is_error": false,
+          "task_success": true,
+          "workspace": "skills/task-list-initialization/evals/workspace/runs/eval5-with_skill/eval5-run3"
+        }
+      ],
+      "task_success_rate": 1.0,
+      "median_duration_s": 41.5
+    }
+  ]
+}

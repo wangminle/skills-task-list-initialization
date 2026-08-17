@@ -48,11 +48,18 @@ def preview_safety_issues(text: str, locale: Locale) -> list[str]:
             continue
         if _has_unclosed_backticks(line):
             issues.append(m["unpaired_backtick"].format(index + 1))
-        html_match = DANGEROUS_HTML_TAG_RE.search(_text_outside_backticks(line))
-        if html_match:
-            tag_match = re.match(r"</?([A-Za-z]+)", html_match.group(0))
-            tag = (tag_match.group(1) if tag_match else html_match.group(0)).lower()
-            issues.append(m["raw_html"].format(index + 1, tag))
+        # Match per cell, not per line (CHK-102 ②): GFM renders cells independently,
+        # so an unclosed "<tag" fragment in one cell joined with a ">" in a later cell
+        # forms a pseudo-tag that exists nowhere in the rendered preview. Per-cell
+        # matching also mirrors escape_cell, which wraps complete tags per cell "back
+        # to back" with this check - what the write path can fix, check flags.
+        for cell in cells:
+            html_match = DANGEROUS_HTML_TAG_RE.search(_text_outside_backticks(cell))
+            if html_match:
+                tag_match = re.match(r"</?([A-Za-z]+)", html_match.group(0))
+                tag = (tag_match.group(1) if tag_match else html_match.group(0)).lower()
+                issues.append(m["raw_html"].format(index + 1, tag))
+                break
     return issues
 
 def check_text(text: str, locale: Locale, schema: str = "dual") -> list[str]:
@@ -389,6 +396,69 @@ def record_quality_warnings(
     if duplicate_count:
         warnings.append(m["warn_duplicate_records"].format(duplicate_count))
     return warnings
+
+
+def time_reversal_issues(
+    records: list[tuple[str, int, list[str]]], locale: Locale,
+    headers_by_title: dict[str, list[str]] | None = None,
+) -> list[str]:
+    """Per-row time-order violations (completed earlier than found).
+
+    The write path refuses NEW inversions (time_reverse_write gate), but that gate
+    cannot see pre-existing rows, so legacy inversions used to pass a green check
+    (CHK-103 finding 4). check surfaces them here as warnings - line-level, unlike
+    the aggregate warn_time_reverse kept for standardize's report. Warning-class on
+    purpose (REQ-08 philosophy): exit code unchanged, post-write auto-check never
+    rolls back on these alone.
+    """
+    headers_by_title = headers_by_title or {}
+    issues: list[str] = []
+    m = T[locale.name]
+    for title, line_no, cells in records:
+        if len(cells) < 6:
+            continue
+        headers = headers_by_title.get(title, [])
+        completed_time = cell_at_field(cells, headers, "completed_time", locale, fallback=-3)
+        found_time = cell_at_field(cells, headers, "found_time", locale, fallback=-4)
+        if not (completed_time and completed_time != "-" and found_time and found_time != "-"):
+            continue
+        ft = _parse_task_time(found_time)
+        ct = _parse_task_time(completed_time)
+        if ft is not None and ct is not None and ct < ft:
+            issues.append(
+                m["time_reverse_existing"].format(line_no, cells[0], found_time, completed_time)
+            )
+    return issues
+
+
+def completed_missing_time_issues(
+    records: list[tuple[str, int, list[str]]], locale: Locale,
+    headers_by_title: dict[str, list[str]] | None = None,
+) -> list[str]:
+    """Per-row completed-status records whose Done time is still '-'.
+
+    Same read-path blind-spot family as time_reversal_issues (CHK-103 finding 5):
+    the aggregate warn_completed_no_time existed but was only consumed by
+    standardize's report, so a legacy completed-without-time row passed a green
+    check. Warning-class (REQ-08): exit code unchanged, post-write auto-check
+    never rolls back on these alone. Sparse-notes, ID-order and exact-duplicate
+    warnings deliberately stay standardize-only (style/low-risk classes).
+    """
+    headers_by_title = headers_by_title or {}
+    issues: list[str] = []
+    m = T[locale.name]
+    for title, line_no, cells in records:
+        if len(cells) < 6:
+            continue
+        headers = headers_by_title.get(title, [])
+        status = cell_at_field(cells, headers, "status", locale, fallback=-2)
+        completed_time = cell_at_field(cells, headers, "completed_time", locale, fallback=-3)
+        if status in locale.completed_statuses and completed_time == "-":
+            issues.append(
+                m["completed_no_time_existing"].format(line_no, cells[0], status)
+            )
+    return issues
+
 
 def classify_extension_recommendations(
     inferred: str,

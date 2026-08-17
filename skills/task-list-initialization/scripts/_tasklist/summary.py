@@ -167,6 +167,9 @@ def compute_summary_rows_by_prefix(
     Records whose ID has no parsable prefix (or whose prefix maps to no row section)
     fall back to their physical section, so both calibers share the same row set and
     only the attribution of misplaced records differs.
+    Prefixless (custom) sections that ended up with zero records after folding are
+    omitted (CHK-102 ③): a "0/0" row for a section whose records were folded into
+    prefix categories reads as data loss instead of attribution.
     """
     prefix_to_title: dict[str, str] = {}
     for row_title, _, section in _summary_section_titles(parse_sections(text), locale):
@@ -182,7 +185,15 @@ def compute_summary_rows_by_prefix(
                 return mapped
         return title
 
-    return _count_rows(text, locale, target_for_record)
+    rows = _count_rows(text, locale, target_for_record)
+    # CHK-102 ③: keep a custom section's row only when records physically remain in
+    # it (unknown-prefix IDs fall back to physical); an all-folded 0/0 row is noise.
+    prefixless = {
+        row_title
+        for row_title, _, section in _summary_section_titles(parse_sections(text), locale)
+        if section is None or not section.prefix
+    }
+    return [row for row in rows if row[0] not in prefixless or row[1] != 0]
 
 
 def _written_rows(text: str, locale: Locale) -> dict[str, tuple[int, int, int]]:

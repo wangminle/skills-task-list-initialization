@@ -28,7 +28,7 @@ from .summary import (
     summary_sync_would_change_caliber,
     update_summary_text,
 )
-from .validator import _has_structural_issues, analyze_standardization, check_text, prefix_mismatches, render_markdown_report, summary_drift_issues, validate_action_status
+from .validator import _has_structural_issues, analyze_standardization, check_text, completed_missing_time_issues, prefix_mismatches, render_markdown_report, summary_drift_issues, time_reversal_issues, validate_action_status
 
 def read_task_list(path: Path, *, lang: str = "zh") -> str:
     """Read a task-list file with localized, single-line errors (BUG-028/BUG-038).
@@ -45,6 +45,32 @@ def read_task_list(path: Path, *, lang: str = "zh") -> str:
     except (IsADirectoryError, PermissionError, UnicodeDecodeError, OSError) as exc:
         raise SystemExit(T[lang]["file_not_readable"].format(path, exc)) from exc
 
+_ID_TOKEN_RE = re.compile(r"\[\[[A-Z]+-\d+\]\]|[A-Z]+-\d+")
+
+
+def _normalized_issue_set(issues: list[str]) -> set[str]:
+    """Comparable issue fingerprints: positional digits collapse, IDs stay distinct.
+
+    Inserting or deleting a row shifts line numbers in check messages, so raw strings
+    cannot be diffed before/after a write. Line numbers and counts collapse to N, but
+    ID tokens ([[BUG-002]], DEV-059) are guarded: BUG-002 ≠ BUG-003, so a write that
+    swaps one dangling ref for a fresh one is NEW, while the same ref merely moving
+    lines is not (BUG-084). Residual imprecision — a same-row invalid value changing
+    to another invalid value — is unreachable: add/update validate values up front.
+    """
+
+    def _guard_id(m: re.Match) -> str:
+        # Map each digit to a letter inside ID tokens so they survive the digit
+        # collapse (BUG-002 -> BUG-AAB), keeping same-prefix IDs distinct.
+        return "".join("ABCDEFGHIJ"[int(ch)] if ch.isdigit() else ch for ch in m.group(0))
+
+    def _normalize(issue: str) -> str:
+        guarded = _ID_TOKEN_RE.sub(_guard_id, issue)
+        return re.sub(r"\d+", "N", guarded)
+
+    return {_normalize(issue) for issue in issues}
+
+
 def write_with_optional_check(
     path: Path,
     original_text: str,
@@ -55,11 +81,14 @@ def write_with_optional_check(
     no_check: bool,
     skip_summary_drift: bool = False,
 ) -> int:
-    """Write new_text; unless --no-check, validate and roll back on failure.
+    """Write new_text; unless --no-check, validate; roll back only on NEW issues.
 
-    Returns 0 on success. On check failure, restores original_text and returns 1.
+    Post-write issues the original file already had (normalized comparison,
+    digits collapsed) keep the write and are disclosed on stderr via
+    write_kept_residual; only issues introduced by this write restore
+    original_text and return 1.
     Does not print success banners — callers print 已追加/已更新 after this returns 0.
-    Prints check_ok only when validation ran and passed.
+    Prints check_ok only when validation ran and passed clean.
     """
     if dry_run:
         print(new_text, end="")
@@ -73,11 +102,23 @@ def write_with_optional_check(
         drift = set(summary_drift_issues(new_text, locale))
         issues = [i for i in issues if i not in drift]
     if issues:
-        atomic_write(path, original_text)
-        print(T[locale.name]["check_failed_rollback"], file=sys.stderr)
-        for issue in issues:
-            print(issue, file=sys.stderr)
-        return 1
+        # Baseline-aware rollback (CHK-102 ①): rolling back on *any* post-write issue
+        # deadlocks multi-error files - fixing row A is blocked by pre-existing errors
+        # in row B and vice versa. Roll back only when this write introduces issues the
+        # original did not have; pre-existing ones are disclosed on stderr instead
+        # (check remains the gate that fails loudly on purpose).
+        baseline = check_text(original_text, locale, schema)
+        if skip_summary_drift:
+            baseline_drift = set(summary_drift_issues(original_text, locale))
+            baseline = [i for i in baseline if i not in baseline_drift]
+        if _normalized_issue_set(issues) - _normalized_issue_set(baseline):
+            atomic_write(path, original_text)
+            print(T[locale.name]["check_failed_rollback"], file=sys.stderr)
+            for issue in issues:
+                print(issue, file=sys.stderr)
+            return 1
+        print(T[locale.name]["write_kept_residual"].format(len(issues)), file=sys.stderr)
+        return 0
     print(T[locale.name]["check_ok"])
     return 0
 
@@ -96,7 +137,9 @@ def resolve_text_option(
             raise SystemExit(T[lang]["notes_conflict"].format(inline_flag, file_flag))
         if file_arg == "-":
             return sys.stdin.read().rstrip("\n")
-        return Path(file_arg).read_text(encoding="utf-8").rstrip("\n")
+        # BUG-085: same localized error contract as read_task_list (missing /
+        # unreadable / non-UTF-8 --*-file inputs must not leak a Python traceback).
+        return read_task_list(Path(file_arg), lang=lang).rstrip("\n")
     if inline is not None:
         return inline
     return default
@@ -787,6 +830,23 @@ def command_check(args: argparse.Namespace) -> int:
         print(T[locale.name]["check_prefix_warnings"])
         for warning in warnings:
             print(warning)
+    # CHK-103 finding 4: surface pre-existing time inversions (completed < found)
+    # as warnings. The write path already refuses new ones; without this a legacy
+    # inversion passes a green check. Warning-class per REQ-08: exit code unchanged.
+    reversals = time_reversal_issues(collect_records(text), locale, section_headers_by_title(text))
+    if reversals:
+        print(T[locale.name]["check_time_reverse_warnings"])
+        for reversal in reversals:
+            print(reversal)
+    # CHK-103 finding 5 (ruled: surface this one class): completed-status rows whose
+    # Done time is still '-' used to pass a green check because the aggregate warning
+    # was standardize-only. Warning-class, exit code unchanged. Sparse-notes, ID-order
+    # and exact-duplicate warnings stay standardize-only (style/low-risk).
+    missing_done = completed_missing_time_issues(collect_records(text), locale, section_headers_by_title(text))
+    if missing_done:
+        print(T[locale.name]["check_completed_no_time_warnings"])
+        for issue in missing_done:
+            print(issue)
     if issues:
         return 1
     print(T[locale.name]["check_ok"])
@@ -1060,7 +1120,18 @@ def command_archive(args: argparse.Namespace) -> int:
     # to their pre-archive bytes — records are never left half-moved (dropped from the
     # main file but missing from the archive).
     if archive_path.exists():
-        existing = archive_path.read_text(encoding="utf-8")
+        existing = read_task_list(archive_path, lang=locale.name)
+        moved_ids = re.findall(r"^\|\s*([A-Z]+-\d+)\s*\|", archive_body, re.M)
+        existing_ids = set(re.findall(r"^\|\s*([A-Z]+-\d+)\s*\|", existing, re.M))
+        conflicts = sorted({i for i in moved_ids if i in existing_ids} | {
+            i for i, n in Counter(moved_ids).items() if n > 1
+        })
+        if conflicts:
+            raise SystemExit(
+                T[locale.name]["archive_dupe"].format(
+                    ", ".join(conflicts), archive_path.name
+                )
+            )
         final_archive = merge_archive_body(existing, archive_body, locale)
     else:
         final_archive = archive_body

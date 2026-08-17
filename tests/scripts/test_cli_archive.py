@@ -233,3 +233,65 @@ class CliArchiveTest(CliTestCase):
             self.assertIn("BUG-001", main)
             # Archive file must not exist (it was committed then rolled back to absent).
             self.assertFalse(archive.exists())
+
+    def test_bug086_refuses_merge_into_existing_duplicate_ids(self):
+        # BUG-086: archiving an ID the target archive already holds (or moving
+        # duplicate IDs in one batch) used to succeed and leave an archive file that
+        # fails its own check. The merge must refuse before any write.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            archive = Path(tmp) / "task-list-archive-202601.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | a | 2026-01-05 10:00 | 2026-01-05 11:00 | 已修复 | - |\n",
+                encoding="utf-8",
+            )
+            archive.write_text(
+                "# 归档\n\n## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | 旧记录 | 2025-12-01 10:00 | 2025-12-01 11:00 | 已修复 | - |\n",
+                encoding="utf-8",
+            )
+            main_before = target.read_bytes()
+            archive_before = archive.read_bytes()
+            result = self.run_cli(
+                "archive", "--file", str(target), "--older-than-days", "30",
+                "--as-of", "2026-08-17", "--output", str(archive), check=False,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("归档冲突", result.stdout + result.stderr)
+            self.assertIn("BUG-001", result.stdout + result.stderr)
+            self.assertEqual(target.read_bytes(), main_before)
+            self.assertEqual(archive.read_bytes(), archive_before)
+
+    def test_bug086_clean_merge_into_existing_archive_still_works(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            archive = Path(tmp) / "task-list-archive-202601.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-003 | 修复 | 新完成 | 2026-01-06 10:00 | 2026-01-06 11:00 | 已修复 | - |\n",
+                encoding="utf-8",
+            )
+            archive.write_text(
+                "# 归档\n\n## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | 旧记录 | 2025-12-01 10:00 | 2025-12-01 11:00 | 已修复 | - |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli(
+                "archive", "--file", str(target), "--older-than-days", "30",
+                "--as-of", "2026-08-17", "--output", str(archive), check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            check = self.run_cli("check", "--file", str(archive), check=False)
+            self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+            text = archive.read_text(encoding="utf-8")
+            self.assertIn("BUG-001", text)
+            self.assertIn("BUG-003", text)

@@ -150,8 +150,13 @@ class EvalsMetaTest(unittest.TestCase):
 BENCHMARK_PLACEHOLDER_STRINGS = ("<model-name>", "<path-to-skill>", "<insert", "TODO:", "TBD")
 
 
-def benchmark_guard_violations(data: dict) -> list[str]:
-    """Mechanical REQ-09 rules for a benchmark summary JSON. Tolerant to shape."""
+def benchmark_guard_violations(data: dict, runs_root: Path | None = None) -> list[str]:
+    """Mechanical REQ-09 rules for a benchmark summary JSON. Tolerant to shape.
+
+    `runs_root` optionally cross-checks the declared count against on-disk run
+    directories; synthetic-payload unit tests pass None so the live (possibly
+    mid-run) workspace cannot contaminate them.
+    """
     violations: list[str] = []
     text = json.dumps(data, ensure_ascii=False)
     for placeholder in BENCHMARK_PLACEHOLDER_STRINGS:
@@ -180,8 +185,7 @@ def benchmark_guard_violations(data: dict) -> list[str]:
                     )
         # Cross-check against the on-disk run workspace when it exists (it is
         # gitignored, so this fires only on a machine that actually ran the evals).
-        runs_root = SKILL_DIR / "evals" / "workspace" / "runs"
-        if runs_root.is_dir():
+        if runs_root is not None and runs_root.is_dir():
             for config_dir in runs_root.iterdir():
                 if config_dir.is_dir():
                     actual = len([p for p in config_dir.iterdir() if p.is_dir()])
@@ -203,7 +207,7 @@ class BenchmarkGuardTest(unittest.TestCase):
                 {"name": "with_skill", "runs": [{"model": "<model-name>", "tokens": 100, "tool_calls": 4}] * 3}
             ],
         }
-        self.assertTrue(benchmark_guard_violations(bad))
+        self.assertTrue(benchmark_guard_violations(bad, runs_root=None))
 
     def test_guard_catches_all_zero_metrics(self):
         bad = {
@@ -212,7 +216,7 @@ class BenchmarkGuardTest(unittest.TestCase):
                 {"name": "with_skill", "runs": [{"model": "glm-5.2", "tokens": 0, "tool_calls": 0}] * 3}
             ],
         }
-        violations = benchmark_guard_violations(bad)
+        violations = benchmark_guard_violations(bad, runs_root=None)
         self.assertTrue(any("both zero" in v for v in violations))
 
     def test_guard_catches_declared_vs_actual_run_count(self):
@@ -222,7 +226,7 @@ class BenchmarkGuardTest(unittest.TestCase):
                 {"name": "with_skill", "runs": [{"model": "glm-5.2", "tokens": 10, "tool_calls": 1}]}
             ],
         }
-        violations = benchmark_guard_violations(bad)
+        violations = benchmark_guard_violations(bad, runs_root=None)
         self.assertTrue(any("declared" in v for v in violations))
 
     def test_guard_catches_empty_runs_list(self):
@@ -233,7 +237,7 @@ class BenchmarkGuardTest(unittest.TestCase):
             "runs_per_configuration": 3,
             "configurations": [{"name": "with_skill", "runs": []}],
         }
-        violations = benchmark_guard_violations(bad)
+        violations = benchmark_guard_violations(bad, runs_root=None)
         self.assertTrue(any("declared" in v for v in violations))
 
     def test_guard_accepts_a_clean_benchmark(self):
@@ -250,7 +254,7 @@ class BenchmarkGuardTest(unittest.TestCase):
                 for name in ("with_skill", "baseline")
             ],
         }
-        self.assertEqual(benchmark_guard_violations(good), [])
+        self.assertEqual(benchmark_guard_violations(good, runs_root=None), [])
 
     def test_real_benchmark_file_if_present_passes_guard(self):
         """If evals/benchmark.json exists it must satisfy the REQ-09 mechanical rules.

@@ -440,6 +440,100 @@ class CliCheckTest(CliTestCase):
             result = self.run_cli("check", "--file", str(target))
             self.assertEqual(result.returncode, 0)
 
+    def test_check_ignores_cross_cell_pseudo_tag(self):
+        # CHK-102 (2): an unclosed "<svg" fragment in one cell joined with a ">"
+        # inside a later cell (even already backticked) forms a pseudo-tag that exists
+        # nowhere in the rendered preview; matching must stay per cell.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                self._preview_safety_file(
+                    notes1="开头含 <svg 的 HTML 错误页",
+                    notes2="排除（`<html>`/`<body>`）",
+                ),
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target))
+            self.assertEqual(result.returncode, 0)
+
+    def test_check_flags_dangerous_tag_completed_within_one_cell(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                self._preview_safety_file(notes2="渲染 <table> 输出"),
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target), check=False)
+            combined = result.stdout + result.stderr
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("裸 HTML", combined)
+            self.assertIn("<table>", combined)
+
+    def _time_reversal_file(self, tmp, *, found, done):
+        target = Path(tmp) / "task-list.md"
+        target.write_text(
+            "# 任务跟踪列表\n\n"
+            "## 代码 Bug\n\n"
+            "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            f"| BUG-001 | 修复 | first | {found} | {done} | 已修复 | - |\n",
+            encoding="utf-8",
+        )
+        return target
+
+    def test_check_warns_on_existing_time_reversal(self):
+        # CHK-103 finding 4: the write gate refuses NEW inversions but a green check
+        # used to hide legacy ones. check must surface them (warning-class, rc stays 0).
+        with tempfile.TemporaryDirectory() as tmp:
+            target = self._time_reversal_file(
+                tmp, found="2026-08-17 10:00", done="2026-08-17 09:00"
+            )
+            result = self.run_cli("check", "--file", str(target))
+            combined = result.stdout + result.stderr
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("时间倒挂提醒", combined)
+            self.assertIn("BUG-001", combined)
+            self.assertIn("早于发现时间", combined)
+
+    def test_check_time_reversal_accepts_equal_and_ordered_times(self):
+        # Equal found/completed is the boundary and must stay quiet.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = self._time_reversal_file(
+                tmp, found="2026-08-17 10:00", done="2026-08-17 10:00"
+            )
+            result = self.run_cli("check", "--file", str(target))
+            self.assertEqual(result.returncode, 0)
+            self.assertNotIn("时间倒挂提醒", result.stdout + result.stderr)
+
+    def test_check_warns_on_completed_without_done_time(self):
+        # CHK-103 finding 5 (ruled): the aggregate warn_completed_no_time was only
+        # consumed by standardize, so a completed row with Done time '-' passed a
+        # green check. check must surface it (warning-class, rc stays 0).
+        with tempfile.TemporaryDirectory() as tmp:
+            target = self._time_reversal_file(tmp, found="2026-08-17 10:00", done="-")
+            result = self.run_cli("check", "--file", str(target))
+            combined = result.stdout + result.stderr
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("完成态缺完成时间提醒", combined)
+            self.assertIn("BUG-001", combined)
+
+    def test_check_completed_no_time_quiet_for_pending_and_backfilled(self):
+        # Pending rows legitimately carry '-' and backfilled rows are fine.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | first | 2026-08-17 10:00 | - | 进行中 | - |\n"
+                "| BUG-002 | 修复 | second | 2026-08-17 10:00 | 2026-08-17 11:00 | 已修复 | - |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target))
+            self.assertEqual(result.returncode, 0)
+            self.assertNotIn("完成态缺完成时间提醒", result.stdout + result.stderr)
+
     def test_check_does_not_flag_placeholder_or_less_than(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "task-list.md"

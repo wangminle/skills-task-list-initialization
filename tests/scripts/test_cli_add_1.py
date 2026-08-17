@@ -391,26 +391,47 @@ class CliAdd1Test(CliTestCase):
             )
             self.assertEqual(self.run_cli("check", "--file", str(target)).returncode, 0)
 
-    def test_add_auto_checks_and_rolls_back_on_failure(self):
-        # Pre-existing invalid time makes post-write check fail; add must not leave the new row.
+    def _preexisting_error_file(self, tmp):
+        target = Path(tmp) / "task-list.md"
+        target.write_text(
+            "# 任务跟踪列表\n\n"
+            "## 代码 Bug\n\n"
+            "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+            "| BUG-001 | 修复 | ok | 2026-01-01 10:00 | - | 待修复 | - |\n"
+            "| BUG-002 | 修复 | broken | 2026-99-99 99:99 | - | 待修复 | - |\n",
+            encoding="utf-8",
+        )
+        return target
+
+    def test_add_keeps_write_when_errors_are_preexisting(self):
+        # Post-write check fails only on BUG-002's pre-existing time; the add itself
+        # is clean, so the write is kept (baseline-aware rollback) and residual disclosed.
         with tempfile.TemporaryDirectory() as tmp:
-            target = Path(tmp) / "task-list.md"
-            target.write_text(
-                "# 任务跟踪列表\n\n"
-                "## 代码 Bug\n\n"
-                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
-                "| --- | --- | --- | --- | --- | --- | --- |\n"
-                "| BUG-001 | 修复 | ok | 2026-01-01 10:00 | - | 待修复 | - |\n"
-                "| BUG-002 | 修复 | broken | 2026-99-99 99:99 | - | 待修复 | - |\n",
-                encoding="utf-8",
-            )
-            before = target.read_text(encoding="utf-8")
+            target = self._preexisting_error_file(tmp)
             result = self.run_cli(
                 "add", "--file", str(target), "--section", "代码 Bug",
                 "--action", "修复", "--description", "新条目", "--status", "待修复",
                 check=False,
             )
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("已追加：BUG-003", result.stdout)
+            self.assertIn("存量问题", result.stderr)
+            self.assertIn("新条目", target.read_text(encoding="utf-8"))
+            self.assertIn("2026-99-99 99:99", target.read_text(encoding="utf-8"))
+
+    def test_add_auto_checks_and_rolls_back_on_new_issue(self):
+        # The add itself introduces a dangling ID reference; rollback fires.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = self._preexisting_error_file(tmp)
+            before = target.read_text(encoding="utf-8")
+            result = self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "新条目", "--status", "待修复",
+                "--notes", "见 [[FOO-999]]", check=False,
+            )
             self.assertNotEqual(result.returncode, 0)
+            self.assertIn("回滚", result.stderr)
             self.assertEqual(before, target.read_text(encoding="utf-8"))
             self.assertNotIn("新条目", target.read_text(encoding="utf-8"))
 
@@ -574,3 +595,30 @@ class CliAdd1Test(CliTestCase):
             self.assertNotRegex(text, r"(?<!`) <title> (?!`)")
             check = self.run_cli("check", "--file", str(target))
             self.assertEqual(check.returncode, 0)
+
+    def test_bug084_line_shift_keeps_write_for_preexisting_error(self):
+        # BUG-082/084: appending above a pre-existing error shifts its line number;
+        # the fingerprint must still match the baseline (positional digits collapse)
+        # so the legitimate add is kept and the residual disclosed.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | a | 2026-01-05 10:00 | - | 待修复 | - |\n"
+                "\n## 检查事项\n\n"
+                "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| CHK-001 | 检查 | x | 2026-99-99 99:99 | - | 待办 | - |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli(
+                "add", "--file", str(target), "--section", "代码 Bug",
+                "--action", "修复", "--description", "新条目", "--status", "待修复",
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("已追加：BUG-002", result.stdout)
+            self.assertIn("存量问题", result.stderr)
+            self.assertIn("新条目", target.read_text(encoding="utf-8"))
