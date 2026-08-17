@@ -1,13 +1,13 @@
 # Task List Initialization · 任务清单初始化
 
-**Version:** `V0.3.5`
+**Version:** `V0.3.6`
 
 **[English](#english)** | **[中文](#中文)**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-V0.3.5-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-V0.3.6-blue.svg)](VERSION)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](README.md)
-[![Tests](https://img.shields.io/badge/tests-232%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-270%20passing-brightgreen.svg)](tests/)
 
 ---
 
@@ -29,11 +29,11 @@ Every project accumulates bugs, features, reviews, tests, docs, and ops work. Th
 - **Schema variants** — `check`/`standardize` auto-detect dual-date vs the supported single-date schema (`--schema auto|dual|single`). Compatible single-date labels include **`Done Date` / `完成日期`**, **`Found Date` / `发现日期`**, and also historical `Start Date` / `开始日期` / `Plan Date` / `规划日期` for read/append. `add` matches a section's recognized schema and appends the matching column count.
 - **Schema migration** — `--migrate-schema` upgrades losslessly-migrateable 6/8-col single-date headers (`Found Date` / `发现日期` → Found only; `Done Date` / `完成日期` → Done only) while **preserving day precision** (no fabricated `00:00`) and **never copying across semantics**. `Start Date` / `Plan Date` headers are recognized but refused with an explicit unmappable message (file unchanged).
 - **Maintenance-rule check** — `standardize` detects the session-end sync rule and Stop hook, and flags **per-tool claim vs actual** mismatches (a Claude hook does not satisfy a Codex claim), rule duplication, hooks that omit `${CLAUDE_PROJECT_DIR}`, and `.gitignore` ignoring the whole `.claude/` directory.
-- **Generic Todo status** — `待办` / `Todo` for non-bug open work; non-standard statuses get suggested mappings.
+- **Generic Todo status** — `待办` / `Todo` for non-bug open work; non-standard statuses get suggested mappings. `-` is the missing-value placeholder for time/optional columns only — not a status: `add`/`update` reject `--status -`, and `check` flags `状态=-` rows by line number (REQ-12).
 - **Safe pipe escape + intra-table blanks** — `--apply-safe-fixes` can merge/escape unescaped `|` in overwide rows and delete blank lines between table data rows (**not** inside fenced code blocks).
 - **Wiki cross-refs** — `[[BUG-001]]` syntax with dangling-reference detection in `check`.
 - **Archive** — `archive --older-than-days N` moves old completed rows to `task-list-archive-YYYYMM.md`.
-- **Tested** — 232 unit tests covering layered domain/parser/validator/maintenance modules plus init, add, update, list, sections, from-json, notes-file, auto-check rollback, check, summary, standardize, archive, install-maintenance (including CLAUDE_PROJECT_DIR Stop-hook path + legacy relative-path upgrade), aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, maintenance-rule detection (including per-tool claim mismatch, rule duplication, non-portable hook paths, `.claude/` gitignore), schema-variant detection, timestamp validation, invalid-ID detection, non-standard-header rejection, archive ID non-reuse, pipe escape, wiki refs, status suggestions, case-insensitive section resolution, English locale, summary drift four-field comparison, summary caliber policy (auto refuses to write on prefix/section conflicts), check prefix-misplacement warnings, width-anomalous-row exclusion from statistics, rate precision cap, time-reverse detection, ID-order regression detection, duplicate-record detection, Codex hook path validation, section-order recommendations, and **preview-safety** (intra-table blanks, fenced-code exclusion, raw HTML including iframe, CommonMark backtick pairing). Heading scans on write/migrate/check skip fenced examples; mixed dual+single files pass `--schema auto`.
+- **Tested** — 270 unit tests covering layered domain/parser/validator/maintenance modules plus init, add, update, list, sections, from-json, notes-file, auto-check rollback, check, summary, standardize, archive, install-maintenance (including CLAUDE_PROJECT_DIR Stop-hook path + legacy relative-path upgrade), aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, maintenance-rule detection (including per-tool claim mismatch, rule duplication, non-portable hook paths, `.claude/` gitignore), schema-variant detection, timestamp validation, invalid-ID detection, non-standard-header rejection, archive ID non-reuse, pipe escape, wiki refs, status suggestions, case-insensitive section resolution, English locale, summary drift four-field comparison, summary caliber policy (auto refuses to write on prefix/section conflicts), check prefix-misplacement warnings, width-anomalous-row exclusion from statistics, dash-as-status rejection, install-maintenance/archive fault-injection rollback, eval-meta placeholder guards, rate precision cap, time-reverse detection, ID-order regression detection, duplicate-record detection, Codex hook path validation, section-order recommendations, and **preview-safety** (intra-table blanks, fenced-code exclusion, raw HTML including iframe, CommonMark backtick pairing). Heading scans on write/migrate/check skip fenced examples; mixed dual+single files pass `--schema auto`.
 
 ### The Task List Standard
 
@@ -175,17 +175,19 @@ A project may legitimately keep a **compatible single-date schema** (`Done Date`
 python3 -m unittest discover -s tests/scripts -p 'test_*.py'
 ```
 
-232 tests, all passing.
+270 tests (269 passed, 1 benchmark-placeholder skip).
 
 ### Project Structure
 
 ```
 skills-task-list-initialization/
-├── VERSION                                   # V0.3.5
+├── VERSION                                   # V0.3.6
 ├── skills/task-list-initialization/
 │   ├── SKILL.md                              # Skill definition
 │   ├── evals/
-│   │   └── evals.json                        # Skill-creator eval cases
+│   │   ├── evals.json                        # Task-execution eval cases (fixtures wired)
+│   │   ├── trigger-evals.json                # Trigger/behavior eval matrix (14 cases)
+│   │   └── fixtures/                         # Eval precondition fixtures
 │   ├── references/
 │   │   ├── task-list-standard.md             # Recommended field/schema standard
 │   │   ├── task-list-template.md             # Canonical templates
@@ -196,7 +198,7 @@ skills-task-list-initialization/
 ├── tests/
 │   └── scripts/                               # Test suite (all test_*.py + shared helpers)
 │       ├── helpers.py                         # Shared CLI test helpers
-│       └── test_*.py                          # Unit tests (232; no file over 600 lines)
+│       └── test_*.py                          # Unit tests (270; no file over 600 lines)
 ├── LICENSE                                   # MIT
 └── README.md
 ```
@@ -206,6 +208,14 @@ skills-task-list-initialization/
 [MIT](LICENSE) © 2026 fenix-wangminle.
 
 ### Changelog
+
+#### V0.3.6
+
+- REQ-12: `-` is the missing-value placeholder for time/optional columns only — **not a status**; `add`/`update` reject `--status -` with the allowed enum, `check` flags existing `状态=-` rows by line number
+- REQ-09/10 eval trustworthiness: `evals/trigger-evals.json` (14 trigger/behavior cases per the plan matrix) with two new fixtures; mechanical benchmark guard in `test_evals_meta.py` (placeholder strings / all-zero tokens & tool_calls / declared-vs-actual run count fail the test once `evals/benchmark.json` exists); eval workspaces gitignored
+- REQ-13/14/15 acceptance hardening: CLI-level fault injection for `install-maintenance` (hook-script write failure rolls the agent file back) and `archive` (archive-write failure leaves the main ledger untouched); the 5 read commands pin exit code 1 on missing files; 21/22 renders as `95.5%` and full completion as `100%`
+- BUG-075/076 regression tests added (unknown ID prefixes are not "misplaced"; unregistered custom sections count in the written summary)
+- `ruff check` clean on scripts and tests; **270** unit tests
 
 #### V0.3.5
 
@@ -420,7 +430,7 @@ python3 "$SKILL_CLI" standardize \
 python3 -m unittest discover -s tests/scripts -p 'test_*.py'
 ```
 
-232 个测试，全部通过。
+270 个测试（269 通过、1 项 benchmark 占位条件跳过）。
 
 ### 项目结构
 
@@ -451,6 +461,14 @@ skills-task-list-initialization/
 [MIT](LICENSE) © 2026 fenix-wangminle。
 
 ### 更新日志
+
+#### V0.3.6
+
+- REQ-12：`-` 仅是时间/可选列的缺失占位符，**不是状态**；`add`/`update` 拒绝 `--status -` 并列出可选枚举，`check` 按行号报出已有 `状态=-` 的行
+- REQ-09/10 评测可信：新增 `evals/trigger-evals.json`（按计划矩阵 14 例触发/行为评测）与两个 fixture；`test_evals_meta.py` 增加 benchmark 机械守卫（占位符 / tokens·tool_calls 全零 / 声明运行数与实际不符，`evals/benchmark.json` 产出即失败约束）；评测 workspace 加入 `.gitignore`
+- REQ-13/14/15 验收加固：`install-maintenance`（hook 脚本写失败回滚 agent 文件）与 `archive`（归档写失败主表字节不变）CLI 级故障注入；5 个读命令缺失文件固定退出码 1；21/22 渲染 `95.5%`、全部完成渲染 `100%`
+- 补齐 BUG-075/076 回归测试（未知前缀不算错位；未注册自定义分区计入写入摘要）
+- `ruff check` 清零；**270** 个单元测试
 
 #### V0.3.5
 

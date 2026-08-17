@@ -65,6 +65,18 @@ class DomainDateSemanticTest(unittest.TestCase):
         self.assertEqual(resolve_header(dual, bug, zh).kind, HeaderKind.STANDARD_DUAL)
         self.assertIsNone(resolve_header(dual, bug, zh).semantic)
 
+    def test_resolve_header_accepts_feature_description_description_alias(self):
+        # REQ-05: the translation-workflow sample's 功能开发 section uses 功能描述 as the
+        # description column with a 开始日期 date column. This is the same single-date shape
+        # as 事项 — it must pass check/add (header recognition), while migration reports the
+        # unmappable 开始日期 semantic (REQ-03) instead of a generic "unknown header" error.
+        zh = LOCALES["zh"]
+        dev = next(s for s in zh.base_sections if s.prefix == "DEV")
+        header = ["ID", "动作", "功能描述", "开始日期", "状态", "备注"]
+        resolved = resolve_header(header, dev, zh)
+        self.assertEqual(resolved.kind, HeaderKind.LEGACY_SINGLE)
+        self.assertEqual(resolved.semantic, DateSemantic.STARTED)
+
     def test_section_schema_field_index_is_name_based(self):
         schema = SectionSchema.from_columns(
             title="代码 Bug",

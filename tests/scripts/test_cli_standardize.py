@@ -67,6 +67,36 @@ class CliStandardizeTest(CliTestCase):
             # BUG-026: 发现日期 → found keeps day precision; completed is "-"; no 00:00.
             self.assertIn("| BUG-001 | 修复 | 旧字段 bug | 2026-06-17 | - | 已修复 | 已验证 |", text)
 
+    def test_standardize_migrate_reports_unmappable_start_date_with_feature_description_header(self):
+        # REQ-05/REQ-03: the translation-workflow sample's 功能开发 section uses 功能描述 as
+        # the description column with a 开始日期 date column. This must be recognized as the
+        # same single-date shape as 事项 (check passes) but reported as semantically
+        # unmappable by --migrate-schema — not as an unknown/illegal header.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            before = (
+                "# 任务跟踪列表\n\n"
+                "## 功能开发\n\n"
+                "| ID | 动作 | 功能描述 | 开始日期 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- |\n"
+                "| DEV-001 | 开发 | 示例功能 | 2026-06-11 | 已完成 | - |\n"
+            )
+            target.write_text(before, encoding="utf-8")
+
+            check = self.run_cli("check", "--file", str(target))
+            self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+
+            result = self.run_cli(
+                "standardize", "--file", str(target), "--migrate-schema", "--dry-run",
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            err = result.stdout + result.stderr
+            self.assertIn("开始日期", err)
+            self.assertIn("无法无损迁移", err)
+            self.assertNotIn("既不是标准", err)
+            self.assertEqual(before, target.read_text(encoding="utf-8"))
+
     def test_standardize_dry_run_stdout_is_only_file_content(self):
         # Regression: --dry-run must keep stdout to the previewed file content only;
         # the diagnostic report must not be appended to the same stdout.
@@ -317,3 +347,41 @@ class CliStandardizeTest(CliTestCase):
             )
             result = self.run_cli("standardize", "--file", str(target))
             self.assertIn("章节顺序", result.stdout)
+
+    def test_fix_only_discloses_check_residuals(self):
+        """CHK-038 观察①: --fix-only prints only the fix summary, so residuals that
+        still fail check (a legacy 状态=- row kept verbatim by migrate) must be
+        disclosed on stderr — rc stays 0, check owns the gate."""
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现日期 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | 已修 | 2026-01-05 | 已修复 | - |\n"
+                "| BUG-002 | 修复 | 占位状态 | 2026-01-06 | - | - |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli(
+                "standardize", "--file", str(target), "--migrate-schema", "--fix-only",
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("修复完成：1 项", result.stdout + result.stderr)
+            self.assertIn("仍有 1 项问题未通过 check", result.stderr)
+            self.assertIn("状态=-", result.stderr)
+
+            # Clean file: no residual hint.
+            target.write_text(
+                "# 任务跟踪列表\n\n## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现日期 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | 已修 | 2026-01-05 | 已修复 | - |\n",
+                encoding="utf-8",
+            )
+            clean = self.run_cli(
+                "standardize", "--file", str(target), "--migrate-schema", "--fix-only",
+                check=False,
+            )
+            self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
+            self.assertNotIn("未通过 check", clean.stderr)

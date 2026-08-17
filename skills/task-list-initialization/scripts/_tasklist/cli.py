@@ -967,6 +967,20 @@ def command_standardize(args: argparse.Namespace) -> int:
             print(T[locale.name]["migrate_skips"].format(len(migrate_warnings)), file=status_stream)
             for warning in migrate_warnings:
                 print(warning, file=status_stream)
+        # CHK-038 观察① (BUG-072 precedent): --fix-only prints only the fix summary, so
+        # residuals that still fail check (e.g. legacy 状态=- rows kept verbatim by
+        # migrate) would read as "all done". Disclose the remainder on stderr; the exit
+        # code stays 0 — check owns the gate, this is a disclosure, not a failure.
+        if should_fix and not args.dry_run:
+            resolved_schema = (
+                args.schema if args.schema != "auto" else detect_schema(working_text, locale)
+            )
+            remaining = check_text(working_text, locale, resolved_schema)
+            if remaining:
+                print(
+                    T[locale.name]["fixes_residual"].format(len(remaining)),
+                    file=sys.stderr,
+                )
         return 0
 
     if not args.report and not printed_preview:

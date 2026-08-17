@@ -71,7 +71,9 @@ _ZH = Locale(
         "开发事项", "DEV", ("ID", "动作", "事项", "优先级", "预计时间", "发现时间", "完成时间", "状态", "备注")
     ),
     actions=frozenset({"修复", "开发", "优化", "调整", "规划", "检查", "文档", "运维"}),
-    statuses=frozenset({"待修复", "已修复", "待办", "待开发", "进行中", "已完成", "已关闭", "已解决", "-"}),
+    # REQ-12: "-" is the missing-value placeholder for time/optional columns only — it
+    # is NOT a business status. add/update reject it; check flags existing rows using it.
+    statuses=frozenset({"待修复", "已修复", "待办", "待开发", "进行中", "已完成", "已关闭", "已解决"}),
     completed_statuses=frozenset({"已修复", "已完成", "已关闭", "已解决"}),
     pending_statuses=frozenset({"待修复", "待办", "待开发", "进行中"}),
     section_aliases={
@@ -149,7 +151,7 @@ _EN = Locale(
         "Development", "DEV", ("ID", "Action", "Item", "Priority", "Estimate", "Found", "Done", "Status", "Notes")
     ),
     actions=frozenset({"Fix", "Develop", "Optimize", "Adjust", "Plan", "Review", "Doc", "Ops"}),
-    statuses=frozenset({"Pending Fix", "Fixed", "Todo", "Pending Dev", "In Progress", "Done", "Closed", "Resolved", "-"}),
+    statuses=frozenset({"Pending Fix", "Fixed", "Todo", "Pending Dev", "In Progress", "Done", "Closed", "Resolved"}),
     completed_statuses=frozenset({"Fixed", "Done", "Closed", "Resolved"}),
     pending_statuses=frozenset({"Pending Fix", "Todo", "Pending Dev", "In Progress"}),
     section_aliases={
@@ -374,6 +376,7 @@ T = {
         "settings_bad_shape": "无法安装 Stop hook：{0} 结构无效（{1}）。已中止，未写入 hook 脚本；请将 hooks.Stop 修正为数组后重试。",
         "report_written": "已生成报告：{0}",
         "fixes_applied": "修复完成：{0} 项",
+        "fixes_residual": "修复已写入，但文件仍有 {0} 项问题未通过 check（如迁移按原样保留的 状态=- 行）；运行 check 查看行号详情。",
         "summary_updated": "已更新统计摘要：{0}",
         "by_section": "按分区统计：",
         "by_prefix": "按前缀统计：",
@@ -522,6 +525,7 @@ T = {
         "settings_bad_shape": "Cannot install Stop hook: {0} has invalid shape ({1}). Aborted without writing the hook script; fix hooks.Stop to be an array and retry.",
         "report_written": "Report generated: {0}",
         "fixes_applied": "Fixes applied: {0}",
+        "fixes_residual": "Fixes written, but {0} issue(s) still fail check (e.g. legacy 状态=- rows kept verbatim by migrate); run check for line-level details.",
         "summary_updated": "Summary updated: {0}",
         "by_section": "By section:",
         "by_prefix": "By ID prefix:",

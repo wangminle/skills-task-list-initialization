@@ -205,11 +205,14 @@ class CliBugs1Test(CliTestCase):
             self.assertIn("1 行因列数与表头不符未参与统计", result.stdout)
 
     def test_bug038_missing_file_gives_clean_error(self):
-        # All commands must report a localized file-not-found instead of a traceback.
+        # All commands must report a localized file-not-found instead of a traceback,
+        # with a STABLE non-zero exit code (REQ-14: the exit code is part of the API
+        # agents script against, so it must be pinned by a test, not just the message).
         with tempfile.TemporaryDirectory() as tmp:
             missing = Path(tmp) / "nope.md"
             for cmd in ("check", "summary", "list", "sections", "standardize"):
                 result = self.run_cli(cmd, "--file", str(missing), check=False)
+                self.assertEqual(result.returncode, 1, f"{cmd} exit code must be 1")
                 self.assertNotIn("Traceback", result.stderr)
                 self.assertIn("不存在", result.stderr)
 

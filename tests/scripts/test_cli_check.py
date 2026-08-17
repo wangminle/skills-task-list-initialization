@@ -71,6 +71,30 @@ class CliCheckTest(CliTestCase):
             self.assertIn("DEV-074", result.stdout)
             self.assertIn("CHK-", result.stdout)
 
+    def test_bug075_check_silent_on_unknown_prefix(self):
+        # BUG-075: a prefix no registry section owns (FOO-, and custom-section READ-)
+        # is NOT misplacement — the by-prefix summary caliber counts such records under
+        # their physical section, so warning would contradict the summary. Only known
+        # prefixes in the wrong section warn.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | 正常 | 2026-08-01 10:00 | 2026-08-01 11:00 | 已修复 | - |\n"
+                "| FOO-001 | 修复 | 未知前缀 | 2026-08-02 10:00 | 2026-08-02 11:00 | 已修复 | - |\n"
+                "\n## 读书笔记\n\n"
+                "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| READ-001 | 检查 | 自定义分区 | 2026-08-03 10:00 | 2026-08-03 11:00 | 已完成 | - |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli("check", "--file", str(target), check=False)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertNotIn("前缀错位警告", result.stdout)
+            self.assertIn("检查通过", result.stdout)
+
     def test_check_reports_duplicate_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "task-list.md"

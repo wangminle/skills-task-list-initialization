@@ -63,19 +63,20 @@ class ValidatorTest(unittest.TestCase):
         self.assertTrue(prefix)
         self.assertEqual(prefix[0].severity, "warning")
 
-    def test_placeholder_dash_status_is_warning_not_check_error(self):
+    def test_dash_status_reports_once_as_bad_status_error(self):
+        # REQ-12 (CHK-037 观察①): a 状态=- row is an invalid status, reported ONCE as a
+        # bad_status error; the old placeholder_status warning double-reported the row.
         text = (
             "# t\n\n## 代码 Bug\n\n"
             "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
-            "| --- | --- | --- | --- | --- | --- |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
             "| BUG-001 | 修复 | a | 2026-08-14 01:00 | - | - | - |\n"
         )
         ledger = parse_ledger(text, LOCALES["zh"])
         issues = validate_ledger(ledger)
-        placeholders = [i for i in issues if i.code == "placeholder_status"]
-        self.assertTrue(placeholders)
-        error_codes = {i.code for i in issues if i.severity == "error"}
-        self.assertNotIn("placeholder_status", error_codes)
+        self.assertEqual([i.code for i in issues], ["bad_status"])
+        self.assertEqual(issues[0].severity, "error")
+        self.assertNotIn("placeholder_status", {i.code for i in issues})
 
 
 if __name__ == "__main__":

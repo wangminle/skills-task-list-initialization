@@ -42,9 +42,16 @@ class ResolvedHeader:
     semantic: DateSemantic | None = None
 
 
+# Single source of truth for the description-slot label aliases (REQ-05 / CHK-038 观察②):
+# a legacy 功能开发 table writes the slot as 功能描述. schemas.py consumes this for both
+# single-date shape matching (_single_date_slot_name) and header field indexing.
+DESCRIPTION_FIELD_ALIASES = frozenset(
+    {"问题描述", "事项", "功能描述", "Description", "Item", "Feature Description"}
+)
+
 _FIELD_ALIASES: dict[str, frozenset[str]] = {
     "action": frozenset({"动作", "Action"}),
-    "description": frozenset({"问题描述", "事项", "Description", "Item"}),
+    "description": DESCRIPTION_FIELD_ALIASES,
     "found_time": frozenset({"发现时间", "Found", "发现日期", "Found Date"}),
     "completed_time": frozenset({"完成时间", "Done", "完成日期", "Done Date"}),
     "single_date": frozenset(

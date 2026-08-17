@@ -141,5 +141,164 @@ class EvalsMetaTest(unittest.TestCase):
         self.assertIn("反引号未闭合", combined)
 
 
+
+
+# REQ-09: benchmark evidence must come from real agent runs. These mechanical rules
+# reject the failure modes found in the deleted V0.2 benchmark (CHK-012): placeholder
+# model names / skill paths, all-zero tokens & tool_calls, and a declared
+# runs_per_configuration that does not match the actual run records.
+BENCHMARK_PLACEHOLDER_STRINGS = ("<model-name>", "<path-to-skill>", "<insert", "TODO:", "TBD")
+
+
+def benchmark_guard_violations(data: dict) -> list[str]:
+    """Mechanical REQ-09 rules for a benchmark summary JSON. Tolerant to shape."""
+    violations: list[str] = []
+    text = json.dumps(data, ensure_ascii=False)
+    for placeholder in BENCHMARK_PLACEHOLDER_STRINGS:
+        if placeholder in text:
+            violations.append(f"placeholder string present: {placeholder}")
+
+    runs = data.get("runs")
+    if runs is None:
+        runs = [r for c in data.get("configurations", []) for r in c.get("runs", [])]
+    for index, record in enumerate(runs):
+        tokens = record.get("tokens")
+        calls = record.get("tool_calls")
+        if tokens in (0, None) and calls in (0, None):
+            violations.append(f"run record {index}: tokens and tool_calls are both zero")
+
+    declared = data.get("runs_per_configuration")
+    if declared is not None:
+        configurations = data.get("configurations")
+        if configurations:
+            for config in configurations:
+                actual = len(config.get("runs", []))
+                if actual != declared:
+                    violations.append(
+                        f"configuration {config.get('name', '?')}: declared "
+                        f"{declared} runs but {actual} present"
+                    )
+        # Cross-check against the on-disk run workspace when it exists (it is
+        # gitignored, so this fires only on a machine that actually ran the evals).
+        runs_root = SKILL_DIR / "evals" / "workspace" / "runs"
+        if runs_root.is_dir():
+            for config_dir in runs_root.iterdir():
+                if config_dir.is_dir():
+                    actual = len([p for p in config_dir.iterdir() if p.is_dir()])
+                    if actual != declared:
+                        violations.append(
+                            f"workspace {config_dir.name}: declared {declared} runs "
+                            f"but {actual} directories present"
+                        )
+    return violations
+
+
+class BenchmarkGuardTest(unittest.TestCase):
+    BENCHMARK_JSON = SKILL_DIR / "evals" / "benchmark.json"
+
+    def test_guard_catches_placeholder_strings(self):
+        bad = {
+            "runs_per_configuration": 3,
+            "configurations": [
+                {"name": "with_skill", "runs": [{"model": "<model-name>", "tokens": 100, "tool_calls": 4}] * 3}
+            ],
+        }
+        self.assertTrue(benchmark_guard_violations(bad))
+
+    def test_guard_catches_all_zero_metrics(self):
+        bad = {
+            "runs_per_configuration": 3,
+            "configurations": [
+                {"name": "with_skill", "runs": [{"model": "glm-5.2", "tokens": 0, "tool_calls": 0}] * 3}
+            ],
+        }
+        violations = benchmark_guard_violations(bad)
+        self.assertTrue(any("both zero" in v for v in violations))
+
+    def test_guard_catches_declared_vs_actual_run_count(self):
+        bad = {
+            "runs_per_configuration": 3,
+            "configurations": [
+                {"name": "with_skill", "runs": [{"model": "glm-5.2", "tokens": 10, "tool_calls": 1}]}
+            ],
+        }
+        violations = benchmark_guard_violations(bad)
+        self.assertTrue(any("declared" in v for v in violations))
+
+    def test_guard_catches_empty_runs_list(self):
+        # BUG-077: an empty runs list is a violation, not "no records to check" —
+        # otherwise a placeholder benchmark declaring 3 runs per config slips through
+        # both the count check and the all-zero-metrics loop.
+        bad = {
+            "runs_per_configuration": 3,
+            "configurations": [{"name": "with_skill", "runs": []}],
+        }
+        violations = benchmark_guard_violations(bad)
+        self.assertTrue(any("declared" in v for v in violations))
+
+    def test_guard_accepts_a_clean_benchmark(self):
+        good = {
+            "runs_per_configuration": 3,
+            "configurations": [
+                {
+                    "name": name,
+                    "runs": [
+                        {"model": "glm-5.2", "tokens": 100 + i, "tool_calls": 4 + i}
+                        for i in range(3)
+                    ],
+                }
+                for name in ("with_skill", "baseline")
+            ],
+        }
+        self.assertEqual(benchmark_guard_violations(good), [])
+
+    def test_real_benchmark_file_if_present_passes_guard(self):
+        """If evals/benchmark.json exists it must satisfy the REQ-09 mechanical rules.
+
+        Until real agent runs are conducted the file stays absent (D1) — vacuous pass.
+        The moment someone commits one, these rules bind.
+        """
+        if not self.BENCHMARK_JSON.exists():
+            self.skipTest("benchmark.json not produced yet (real agent runs pending)")
+        data = json.loads(self.BENCHMARK_JSON.read_text(encoding="utf-8"))
+        self.assertEqual(benchmark_guard_violations(data), [])
+
+
+class TriggerEvalsMetaTest(unittest.TestCase):
+    TRIGGER_EVALS_JSON = SKILL_DIR / "evals" / "trigger-evals.json"
+    KINDS = {"should_trigger", "implicit_trigger", "should_not_trigger", "behavior"}
+
+    def test_trigger_evals_schema_and_coverage(self):
+        data = json.loads(self.TRIGGER_EVALS_JSON.read_text(encoding="utf-8"))
+        self.assertEqual(data["skill_name"], "task-list-initialization")
+        evals = data["evals"]
+        ids = [e["id"] for e in evals]
+        self.assertEqual(len(ids), len(set(ids)), "trigger eval ids must be unique")
+        kinds = {e["kind"] for e in evals}
+        self.assertEqual(kinds, self.KINDS, "all four matrix categories must be covered")
+        for ev in evals:
+            self.assertIn(ev["kind"], self.KINDS)
+            self.assertTrue(ev.get("prompt"))
+            self.assertTrue(ev.get("expect"))
+            for rel in ev.get("files", []):
+                self.assertTrue(
+                    (SKILL_DIR / rel).exists(),
+                    f"trigger eval {ev['id']} references missing fixture {rel}",
+                )
+
+    def test_trigger_evals_have_no_placeholder_strings(self):
+        text = self.TRIGGER_EVALS_JSON.read_text(encoding="utf-8")
+        for placeholder in BENCHMARK_PLACEHOLDER_STRINGS:
+            self.assertNotIn(placeholder, text)
+
+
+class EvalsPlaceholderTest(unittest.TestCase):
+    def test_evals_json_has_no_placeholder_strings(self):
+        """REQ-10 / D1: committed eval metadata must not carry template leftovers."""
+        text = EVALS_JSON.read_text(encoding="utf-8")
+        for placeholder in BENCHMARK_PLACEHOLDER_STRINGS:
+            self.assertNotIn(placeholder, text)
+
+
 if __name__ == "__main__":
     unittest.main()

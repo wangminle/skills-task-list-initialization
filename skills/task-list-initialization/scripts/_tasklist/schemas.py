@@ -5,7 +5,7 @@ import argparse
 import difflib
 import re
 from datetime import datetime
-from .domain import DateSemantic, HeaderKind, ResolvedHeader
+from .domain import DESCRIPTION_FIELD_ALIASES, DateSemantic, HeaderKind, ResolvedHeader
 from .locales import (
     DATE_COLUMN_SEMANTICS,
     DUAL_DATE_COLS,
@@ -37,10 +37,35 @@ def to_single_date_columns(columns: tuple[str, ...], locale: Locale) -> tuple[st
         out.append(single if col == done else col)
     return tuple(out)
 
+# Validation-side description-slot aliases, keyed by locale and by the canonical slot
+# label of the section being validated. The only legacy variant is 功能开发 writing
+# the slot as 功能描述 (translation sample, REQ-05). Header labels must match the
+# auto-detected locale (SKILL.md locale convention): cross-language labels
+# (功能描述 in an English table, Item in a Chinese one) and cross-section labels
+# (事项 in 代码 Bug, which canonically uses 问题描述) stay non-standard.
+_DESCRIPTION_SLOT_ALIASES: dict[str, dict[str, frozenset[str]]] = {
+    "zh": {
+        "问题描述": frozenset({"问题描述"}),
+        "事项": frozenset({"事项", "功能描述"}),
+    },
+    "en": {
+        "Description": frozenset({"Description"}),
+        "Item": frozenset({"Item", "Feature Description"}),
+    },
+}
+
+
 def _single_date_slot_name(headers: list[str], canonical_single: list[str], locale: Locale) -> str | None:
-    """Return the actual date-column label when headers match a single-date shape, else None."""
+    """Return the actual date-column label when headers match a single-date shape, else None.
+
+    Non-date columns must match the canonical name, except the description slot which
+    accepts only the aliases registered for THIS locale and THIS canonical slot in
+    _DESCRIPTION_SLOT_ALIASES — 功能描述/Feature Description is dev-section-only
+    legacy compat, and everything cross-language or cross-section stays rejected.
+    """
     single = SINGLE_DATE_COL[locale.name]
     aliases = set(SINGLE_DATE_ALIASES[locale.name])
+    desc_slots = _DESCRIPTION_SLOT_ALIASES[locale.name]
     if len(headers) != len(canonical_single):
         return None
     date_name: str | None = None
@@ -49,6 +74,9 @@ def _single_date_slot_name(headers: list[str], canonical_single: list[str], loca
             if actual not in aliases:
                 return None
             date_name = actual
+        elif expected in desc_slots:
+            if actual not in desc_slots[expected]:
+                return None
         elif actual != expected:
             return None
     return date_name
@@ -70,6 +98,11 @@ def date_column_semantic(date_header: str, locale: Locale) -> str | None:
     return DATE_COLUMN_SEMANTICS[locale.name].get(date_header)
 
 
+def _is_extended_single_date_shape(headers: list[str], locale: Locale) -> bool:
+    """True if headers carry the extended single-date markers (优先级/预计时间 or en)."""
+    return locale.dev_extended.columns[3] in headers and locale.dev_extended.columns[4] in headers
+
+
 def resolve_header(cells: list[str], section: Section, locale: Locale) -> ResolvedHeader:
     """Classify a header row (D3): dual / legacy-single / legacy-extended / unknown."""
     actual = list(cells)
@@ -79,6 +112,11 @@ def resolve_header(cells: list[str], section: Section, locale: Locale) -> Resolv
         return ResolvedHeader(HeaderKind.STANDARD_DUAL)
     date_name = matches_single_date_header(actual, section, locale)
     kind = HeaderKind.LEGACY_SINGLE
+    # An 8-column single-date header carrying 优先级/预计时间 (Priority/Estimate) is the
+    # LEGACY_EXTENDED variant no matter which section title hosts it (功能开发 or 开发事项) —
+    # the distinction is the shape, not the section (REQ-04 / plan A2).
+    if date_name is not None and _is_extended_single_date_shape(actual, locale):
+        kind = HeaderKind.LEGACY_EXTENDED
     if date_name is None and section.prefix == "DEV":
         date_name = matches_single_date_header(actual, locale.dev_extended, locale)
         kind = HeaderKind.LEGACY_EXTENDED
@@ -329,7 +367,7 @@ def header_field_index(headers: list[str], locale: Locale) -> dict[str, int]:
     }
     aliases = {
         "action": {"动作", "Action"},
-        "description": {"问题描述", "事项", "Description", "Item"},
+        "description": DESCRIPTION_FIELD_ALIASES,
         "found_time": {dual_found, *found_aliases},
         "completed_time": {dual_done, *completed_aliases},
         "single_date": {*found_aliases, *completed_aliases, *other_single},

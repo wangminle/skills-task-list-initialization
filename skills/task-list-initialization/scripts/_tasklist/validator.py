@@ -626,15 +626,7 @@ def validate_ledger(ledger, schema: str = "auto") -> list:
         issues.append(
             ValidationIssue(code="prefix_mismatch", message=message, severity="warning")
         )
-    for rec in ledger.records:
-        if rec.status == "-":
-            issues.append(
-                ValidationIssue(
-                    code="placeholder_status",
-                    message=rec.item_id,
-                    severity="warning",
-                    line=rec.source_line,
-                )
-            )
+    # REQ-12: a 状态=- row is now a hard bad_status error from check_text; the old
+    # placeholder_status warning would double-report the same row (CHK-037 观察①).
     return issues
 

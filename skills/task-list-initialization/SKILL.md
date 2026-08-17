@@ -5,7 +5,7 @@ description: Use when creating, standardizing, migrating, validating, or maintai
 
 # Task List Initialization
 
-> Skill version **V0.3.5**. Canonical string: repo root `VERSION`.
+> Skill version **V0.3.6**. Canonical string: repo root `VERSION`.
 
 ## Overview
 
@@ -55,6 +55,7 @@ Optional sections:
 - Bug completion normally uses `已修复`; non-bug completion normally uses `已完成`.
 - Use `待修复` for open bugs; use `待办` as the generic open status for docs/ops/reviews/adjustments/optimizations/plans (or `待开发` for feature work). Also supported: `进行中`, `已关闭`, `已解决`.
 - `已解决` is allowed for troubleshooting items that are diagnosed and closed; prefer `已完成` otherwise. It counts as a completed status.
+- `-` is the missing-value placeholder for time (and optional) columns only — it is **not a status**: `add`/`update` reject `--status -` with the allowed list, and `check` flags existing `状态=-` rows by line number.
 - Escape literal pipes inside table cells as `\|`. `standardize --apply-safe-fixes` can auto-escape unescaped `|` in overwide rows when status/time columns still align after merge.
 - **Preview safety (required):**
   1. Data rows in the same table must be contiguous — **no blank lines between `|` rows**. Blanks are only allowed between the table and the next `##` heading. CommonMark/GFM ends a table at a blank line; later `| ... |` lines become a new (broken) table. `standardize --apply-safe-fixes` collapses those intra-table blanks but **must not rewrite fenced code blocks** (Markdown table *examples* keep their blank lines).
@@ -84,7 +85,7 @@ The task-list comes in two languages: Chinese (Simplified, `zh`) and English (`e
 - **Any other language** → tell the user you will produce an English task-list, then create it (`init --lang en`).
 - **Cannot determine** the language → default to Chinese (`zh`).
 
-The English task-list is a faithful translation of the Chinese one: same sections, same ID prefixes (`BUG-`/`ADJ-`/…), same 7-column model — only the labels differ (section titles, column headers, action/status enums, header notes). Existing files are handled by auto-detection: `add`/`check`/`summary`/`standardize` sniff the file's language from its structural markers (title and section headings) and validate against the matching locale, so they take no `--lang` flag.
+The English task-list is a faithful translation of the Chinese one: same sections, same ID prefixes (`BUG-`/`ADJ-`/…), same 7-column model — only the labels differ (section titles, column headers, action/status enums, header notes). Header labels must stay within the detected locale: the only cross-label compat is the legacy DEV section writing its description slot as `功能描述` / `Feature Description` — everything cross-language or cross-section (e.g. `事项` under 代码 Bug) is non-standard and rejected. Existing files are handled by auto-detection: `add`/`check`/`summary`/`standardize` sniff the file's language from its structural markers (title and section headings) and validate against the matching locale, so they take no `--lang` flag.
 
 When installing the maintenance rule (workflow step 5, or the standardize maintenance check), match the rule text and Stop-hook message to the task-list's language — see `references/maintenance-rule.md`.
 
@@ -172,7 +173,7 @@ python3 "$SKILL_CLI" archive --file task-list.md --older-than-days 90
 
 Run `--help` for all options. Prefer CLI generation for new files, then review the result manually for project-specific wording.
 
-`summary --write` recomputes the `统计摘要` table from current records (total / completed / pending / completion rate) and writes it back, appending the section if it does not exist yet. `--policy auto|by-section|by-prefix` (default `auto`) picks the counting caliber: when a record's ID prefix doesn't match its physical section, the by-prefix and by-section counts disagree, and `auto` then **refuses to write** (non-zero exit, file unchanged) while printing both counts plus which one the file's existing summary matches. Choose `--policy by-prefix` to keep prefix-caliber summaries (typical for historical ledgers) or `--policy by-section` to switch to physical sections. Width-anomalous rows (cell count differs from the section header, usually an unescaped `|`) are excluded from statistics so cell fragments cannot surface as statuses; the read-only `summary` view reports the excluded-row count. Use `--dry-run` to preview without writing.
+`summary --write` recomputes the `统计摘要` table from current records (total / completed / pending / completion rate) and writes it back, appending the section if it does not exist yet. `--policy auto|by-section|by-prefix` (default `auto`) picks the counting caliber: when a record's ID prefix doesn't match its physical section, the by-prefix and by-section counts disagree, and `auto` then **refuses to write** (non-zero exit, file unchanged) while printing both counts plus which one the file's existing summary matches. Choose `--policy by-prefix` to keep prefix-caliber summaries (typical for historical ledgers) or `--policy by-section` to switch to physical sections. Width-anomalous rows (cell count differs from the section header, usually an unescaped `|`) are excluded from statistics so cell fragments cannot surface as statuses; the read-only `summary` view reports the excluded-row count. `--write --dry-run` previews the rewritten table without touching the file; `--dry-run` on its own stays a read-only stats view.
 
 ## References
 
@@ -180,4 +181,4 @@ Run `--help` for all options. Prefer CLI generation for new files, then review t
 - `references/task-list-template.md`: canonical Markdown templates for each profile.
 - `references/maintenance-rule.md`: canonical maintenance-rule text (Chinese and English), file-selection logic, language-matching guidance, and optional `Stop`-hook guarantee layer for installing into a project's `CLAUDE.md`/`AGENTS.md`.
 - `evals/evals.json`: skill-creator evaluation cases.
-- Repo root `VERSION`: current skill version string (`V0.3.5`).
+- Repo root `VERSION`: current skill version string (`V0.3.6`).

@@ -90,6 +90,8 @@
 
 如果项目只想维护“完成台账”，可以只使用 `已修复` 和 `已完成`。`已解决`、`已修复`、`已完成`、`已关闭` 都按完成态统计。未完成态：`待修复`/`待办`/`待开发`/`进行中`。`check` 对非标准状态（如「待处理」）会附带建议映射（如 → `待办` / `待开发`）。
 
+**`-` 不是状态**（REQ-12）：`-` 仅是时间列（以及 优先级/预计时间 等可选列）的缺失值占位符。`状态` 列必须取上表枚举之一——`add` / `update` 传 `--status -` 会被拒绝并列出可选状态；已有 `状态=-` 的行会被 `check` 按行号报为非法状态。
+
 ## 条目互引
 
 备注/描述中可用 wiki 风格互引：`[[BUG-001]]`、`[[DOC-036]]`。`check` 会检测悬空引用（指向不存在的 ID）。归档后主表不再含该 ID，引用它的条目会被标悬空——归档前宜先清理或改写互引。
@@ -171,6 +173,8 @@ task-list 支持两种语言：**中文（简体，`zh`，默认）** 与 **英�
 | 待修复·已修复·待办·待开发·进行中·已完成·已解决·已关闭 | Pending Fix·Fixed·Todo·Pending Dev·In Progress·Done·Resolved·Closed |
 
 Bug 分区中文用 `问题描述`、英文用 `Description`；其余分区中文用 `事项`、英文用 `Item`。The Bug section uses `问题描述`/`Description`; other sections use `事项`/`Item`. 终态（已完成态）：`已修复`/`已完成`/`已解决`/`已关闭` ↔ `Fixed`/`Done`/`Resolved`/`Closed`.
+
+**描述列别名（只读兼容，不改写）：** 历史文件把描述列写成 `功能描述` / `Feature Description` 时，与 `事项`/`Item` 属于同一单日期形状，`check` 接受、`add` 可追加（REQ-05）。别名集合与代码单一来源 `_tasklist.domain.DESCRIPTION_FIELD_ALIASES` 保持一致：`问题描述`/`事项`/`功能描述`/`Description`/`Item`/`Feature Description`。
 
 ## 日期 schema 变体（双日期 / 单日期）
 

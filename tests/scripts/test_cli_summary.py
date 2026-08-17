@@ -253,6 +253,35 @@ class CliSummaryTest(CliTestCase):
             check = self.run_cli("check", "--file", str(target))
             self.assertIn("检查通过", check.stdout)
 
+    def test_bug076_custom_section_with_table_gets_summary_row(self):
+        # BUG-076: a custom (non-registry) section carrying a real table must appear
+        # in the written summary (the read-only view already counts its records), and
+        # a pure-prose section without a table must NOT get a row.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | 甲 | 2026-08-01 10:00 | 2026-08-01 11:00 | 已修复 | - |\n"
+                "\n## 读书笔记\n\n"
+                "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| READ-001 | 检查 | 自定义分区记录 | 2026-08-03 10:00 | - | 待办 | - |\n"
+                "\n## 附注\n\n"
+                "纯文字段落，没有表格。\n",
+                encoding="utf-8",
+            )
+            self.run_cli("summary", "--file", str(target), "--write")
+
+            text = target.read_text(encoding="utf-8")
+            self.assertIn("| 代码 Bug | 1 | 1 | 0 | 100% |", text)
+            self.assertIn("| 读书笔记 | 1 | 0 | 1 | 0% |", text)
+            self.assertIn("| **总计** | 2 | 1 | 1 | 50% |", text)
+            self.assertNotIn("| 附注 |", text)
+            check = self.run_cli("check", "--file", str(target))
+            self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+
     def test_summary_drift_catches_done_mismatch(self):
         """Changing only the done/pending counts (total stays same) must be caught."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -352,3 +381,59 @@ class CliSummaryTest(CliTestCase):
         issues = mod.summary_drift_issues(text, locale)
         rate_issues = [i for i in issues if "完成率" in i or "rate" in i.lower()]
         self.assertEqual(rate_issues, [], f"should tolerate rounding, got {rate_issues}")
+
+    def test_req15_rate_one_decimal_matches_history(self):
+        """REQ-15: 21/22 renders as 95.5% (one decimal, no pure-format diff vs history)
+        and 114/114-style full completion renders as 100% (trailing zeros stripped)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            rows = "\n".join(
+                f"| BUG-{i:03d} | 修复 | 示例 | 2026-01-01 09:00 | "
+                f"{'2026-01-05 10:00' if i <= 21 else '-'} | "
+                f"{'已修复' if i <= 21 else '待修复'} | - |"
+                for i in range(1, 23)
+            )
+            target.write_text(
+                "# 任务跟踪列表\n\n## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                f"{rows}\n",
+                encoding="utf-8",
+            )
+            self.run_cli("summary", "--file", str(target), "--write")
+            text = target.read_text(encoding="utf-8")
+            self.assertIn("| 代码 Bug | 22 | 21 | 1 | 95.5% |", text)
+
+            # All 22 done → 100%, not 100.0%.
+            target.write_text(
+                "# 任务跟踪列表\n\n## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                f"{rows.replace('2026-01-01 09:00 | - | 待修复', '2026-01-01 09:00 | 2026-01-06 10:00 | 已修复')}\n",
+                encoding="utf-8",
+            )
+            self.run_cli("summary", "--file", str(target), "--write")
+            self.assertIn("| 代码 Bug | 22 | 22 | 0 | 100% |", target.read_text(encoding="utf-8"))
+
+    def test_bug076_custom_section_included_in_written_summary(self):
+        """BUG-076: an unregistered custom section carrying a real table must appear in
+        the summary --write table and the totals, matching the read-only view (the old
+        code silently dropped it, undercounting 总计)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n## 代码 Bug\n\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| BUG-001 | 修复 | a | 2026-01-01 09:00 | - | 待修复 | - |\n"
+                "\n## 临时跟踪\n\n"
+                "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| FOO-001 | 修复 | custom section | 2026-01-01 09:00 | - | 待修复 | - |\n",
+                encoding="utf-8",
+            )
+            self.run_cli("summary", "--file", str(target), "--write")
+            text = target.read_text(encoding="utf-8")
+            self.assertIn("| 代码 Bug | 1 | 0 | 1 | 0% |", text)
+            self.assertIn("| 临时跟踪 | 1 | 0 | 1 | 0% |", text)
+            self.assertIn("| **总计** | 2 | 0 | 2 | 0% |", text)
