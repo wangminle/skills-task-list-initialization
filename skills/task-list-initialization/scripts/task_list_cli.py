@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """Create and maintain Markdown task-list files (Chinese or English).
 
-Implementation is split under `_tasklist/` for maintainability:
-- `_locale.py` — Locale/Section data, i18n strings, status suggestions
-- `_lib.py` — parsing, validation, commands, argparse
-This module re-exports the public API so existing imports and tests keep working.
+Implementation lives under ``_tasklist/``. This entry script only fixes
+``sys.path`` and re-exports the formal public API compatibility surface.
 """
 
 from __future__ import annotations
@@ -16,10 +14,13 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from _tasklist._locale import *  # noqa: F403,E402
-from _tasklist._lib import *  # noqa: F403,E402
-from _tasklist._lib import main  # noqa: E402  (explicit re-export so ruff resolves main)
+from _tasklist import public_api as _public_api  # noqa: E402
+from _tasklist.public_api import PUBLIC_API  # noqa: E402
+
+globals().update({name: getattr(_public_api, name) for name in PUBLIC_API})
+
+__all__ = list(PUBLIC_API)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_public_api.main())

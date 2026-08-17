@@ -95,7 +95,6 @@ session_id="$(printf '%s' "$input" | python3 -c 'import json,sys; print(json.loa
 guard="/tmp/claude-tasklist-sync-${session_id}"
 [ -f "$guard" ] && exit 0
 touch "$guard"
-# 中文项目用这一行（English projects: replace reason with the English version below）:
 python3 -c 'import json; print(json.dumps({"decision":"block","reason":"会话结束前请按 CLAUDE.md 的「会话结束任务同步」规则：若本次涉及任务完成，把新增条目与状态变更写入根目录 task-list.md 并在回复中告知用户；否则简短说明无需同步。本提醒每会话仅触发一次。"}, ensure_ascii=False))'
 ```
 
@@ -117,5 +116,5 @@ python3 -c 'import json; print(json.dumps({"decision":"block","reason":"Before t
 - **语言一致**：规则正文与 hook `reason` 的语言必须与 `task-list.md` 一致（由 `init --lang` 决定）。Match the language of the rule text and hook `reason` to the `task-list.md` (decided by `init --lang`).
 - **记录规范**：写入 `task-list.md` 时遵循 `task-list-standard.md`（只追加、ID 不复用含归档、8 个动作枚举、`YYYY-MM-DD HH:MM` 时间、未完成填 `-`），优先用 CLI `add`/`update` 并跑 `check` 校验。`check` 是预览门禁：表内空行、裸 HTML 标签、未按 CommonMark 闭合的反引号必须失败；围栏代码不当表格。手改 md 后也必须再跑 `check`。Follow `task-list-standard.md` when writing (append-only, IDs never reused including archives, 8-action enum, `YYYY-MM-DD HH:MM` times, `-` for incomplete); prefer CLI `add`/`update` then `check`. `check` is the preview gate (intra-table blanks, raw HTML, unclosed CommonMark code spans; fenced examples are not tables). Re-run `check` after any hand edit.
 - **告知用户**：安装完成后，在回复中说明写入了哪个文件、用了哪种语言、是否装了 hook、需要重启会话生效。After install, tell the user which file was written, in which language, whether the hook was added, and that a restart is needed.
-- **与 standardize 检测同源**：`standardize` 报告的「维护规则状态」分区靠固定标记判定是否已安装——在 agent 文件里查找中文标题片段 `会话结束任务同步` 或英文 `Session-end Task Sync`、在 `.claude/settings.json` 的 `Stop` hook 命令里查找 `tasklist`。这些标记就是本模板第 2、3 步正文的固定措辞，因此**不要改动标题与脚本名**；若必须改，需同步更新 `task_list_cli.py` 的 `MAINTENANCE_RULE_MARKER` / `MAINTENANCE_RULE_MARKER_EN` / `TASKLIST_HOOK_MARKER` 常量，否则检测会误报「未安装」。
+- **与 standardize 检测同源**：规则正文与 hook 脚本由 `scripts/_tasklist/maintenance.py` 生成；本文件中的围栏内容必须与代码常量逐字一致。检测标记为中文标题片段 `会话结束任务同步`、英文 `Session-end Task Sync`、hook 脚本名 `tasklist_sync_reminder.sh`。若必须改标题或脚本名，同步更新 `MAINTENANCE_RULE_MARKER` / `MAINTENANCE_RULE_MARKER_EN` / `TASKLIST_HOOK_MARKER`。
 - **声明 vs 实际**：若 agent 文件写了「由 Stop hook / settings.json 保证触发」但实际未装**对应工具**的有效 hook，`standardize` 会标「声明与实际不一致」（Claude hook 不能顶替 Codex 声明）。规则双写、未使用 `${CLAUDE_PROJECT_DIR}` 的 hook、`.gitignore` 忽略整个 `.claude/` 也会告警。第 2 步规则正文已改为「有 hook 则保证 / 无 hook 则自觉」；旧项目若仍用强保证措辞，请补装 hook 或改写声明。

@@ -5,7 +5,7 @@ description: Use when creating, standardizing, migrating, validating, or maintai
 
 # Task List Initialization
 
-> Skill version **V0.3.3**. Canonical string: repo root `VERSION`.
+> Skill version **V0.3.4**. Canonical string: repo root `VERSION`.
 
 ## Overview
 
@@ -134,7 +134,7 @@ Moves completed rows whose Done time is on/before `as-of − N days` into `task-
 
 ## CLI
 
-Use `$SKILL_DIR/scripts/task_list_cli.py` for repeatable operations. `$SKILL_DIR` is this skill's install root — typically `~/.claude/skills/task-list-initialization` (Claude Code) or the skill folder inside a project's `skills/` tree. On Windows, replace `python3` with `python`. Implementation lives under `scripts/_tasklist/` (`_locale.py` data/i18n, `_lib.py` commands); the entry script re-exports the same public API.
+Use `$SKILL_DIR/scripts/task_list_cli.py` for repeatable operations. `$SKILL_DIR` is this skill's install root — typically `~/.claude/skills/task-list-initialization` (Claude Code) or the skill folder inside a project's `skills/` tree. On Windows, replace `python3` with `python`. Implementation lives under `scripts/_tasklist/` (`cli.py` commands, `parser.py` / `validator.py` / `locales.py`, `public_api.py`, …); the entry script re-exports the formal public API compat list (including `detect_locale`).
 
 ```bash
 SKILL_CLI="$SKILL_DIR/scripts/task_list_cli.py"   # or absolute path to task_list_cli.py
@@ -157,7 +157,7 @@ python3 "$SKILL_CLI" standardize --file task-list.md --migrate-schema --apply-sa
 python3 "$SKILL_CLI" archive --file task-list.md --older-than-days 90
 ```
 
-`init --lang {zh,en}` selects the template language (`zh` = Simplified Chinese, default; `en` = English). The other subcommands auto-detect the language from the target file. `check`/`standardize` accept `--schema {auto,dual,single}` (default `auto`) to validate a file that keeps the legacy single-date schema. `add` auto-matches the target section's schema and emits the corresponding column count, so no flag is needed. `check` also flags malformed IDs (e.g. `bug-001`, `BUG-12`) in the first column rather than silently skipping them, validates timestamps, reports dangling `[[ID]]` refs, suggests nearest standard statuses for non-standard values, and **fails on preview-breaking markup**: blank lines between table rows (fenced code examples are ignored), raw flow-breaking HTML tags in cells, and unclosed CommonMark code spans on a data row. `add` refuses to write into a section whose header does not match a recognized schema (e.g. a reordered `ID / 状态 / 动作 / …`) instead of guessing the column layout — fix the header manually. `--migrate-schema` only upgrades supported 6/8-col single-date legacy schemas; it will refuse a reordered dual-date header rather than shift field meanings. `add`/`update` wrap blacklisted raw HTML tags (such as `<title>`) as inline code on write.
+`init --lang {zh,en}` selects the template language (`zh` = Simplified Chinese, default; `en` = English). The other subcommands auto-detect the language from the target file. `check`/`standardize` accept `--schema {auto,dual,single}` (default `auto`) to validate a file that keeps the legacy single-date schema. `add` auto-matches the target section's schema and emits the corresponding column count, so no flag is needed. A file that mixes dual-date and single-date sections is valid in `--schema auto` (each section is checked against its own header). `check` also flags malformed IDs (e.g. `bug-001`, `BUG-12`) in the first column rather than silently skipping them, validates timestamps, reports dangling `[[ID]]` refs, suggests nearest standard statuses for non-standard values, and **fails on preview-breaking markup**: blank lines between table rows (fenced code examples are ignored), raw flow-breaking HTML tags in cells, unclosed CommonMark code spans on a data row, and GFM-invalid table separators. Heading scans for `add` / `summary --write` / `--migrate-schema` / `--apply-safe-fixes` / duplicate-section detection skip fenced code blocks so Markdown table *examples* cannot hijack real tables. `add` refuses to write into a section whose header does not match a recognized schema (e.g. a reordered `ID / 状态 / 动作 / …`) instead of guessing the column layout — fix the header manually. `--migrate-schema` only upgrades supported 6/8-col single-date legacy schemas; it will refuse a reordered dual-date header rather than shift field meanings. `add`/`update` wrap blacklisted raw HTML tags (such as `<title>`) as inline code on write; `--from-json` requires string fields (lists/dicts are rejected).
 
 **Write-path ergonomics:**
 
@@ -180,4 +180,4 @@ Run `--help` for all options. Prefer CLI generation for new files, then review t
 - `references/task-list-template.md`: canonical Markdown templates for each profile.
 - `references/maintenance-rule.md`: canonical maintenance-rule text (Chinese and English), file-selection logic, language-matching guidance, and optional `Stop`-hook guarantee layer for installing into a project's `CLAUDE.md`/`AGENTS.md`.
 - `evals/evals.json`: skill-creator evaluation cases.
-- Repo root `VERSION`: current skill version string (`V0.3.3`).
+- Repo root `VERSION`: current skill version string (`V0.3.4`).

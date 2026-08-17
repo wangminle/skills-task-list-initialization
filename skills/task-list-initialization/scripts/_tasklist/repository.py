@@ -19,6 +19,7 @@ disk full, OS error) the file is left truncated or empty. This module replaces a
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 from pathlib import Path
 
@@ -37,6 +38,10 @@ def atomic_write(path: Path, text: str) -> None:
     sites which relied on ``parent.mkdir`` or the file already existing).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Preserve the target's mode when replacing an existing file. NamedTemporaryFile
+    # defaults to 0o600, and os.replace keeps the temp's mode — that turned every
+    # rewrite into a 0600 chmod (BUG-068). New files use 0o644.
+    existing_mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
     # delete=False: we rename it ourselves via os.replace; unlink on failure.
     tmp = tempfile.NamedTemporaryFile(
         mode="w",
@@ -51,6 +56,7 @@ def atomic_write(path: Path, text: str) -> None:
         tmp.flush()
         os.fsync(tmp.fileno())
         tmp.close()
+        os.chmod(tmp.name, existing_mode)
         os.replace(tmp.name, path)
     except BaseException:
         # Close the handle if still open, then remove the temp file. Swallow cleanup

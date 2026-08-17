@@ -1,13 +1,13 @@
 # Task List Initialization · 任务清单初始化
 
-**Version:** `V0.3.3`
+**Version:** `V0.3.4`
 
 **[English](#english)** | **[中文](#中文)**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-V0.3.3-blue.svg)](VERSION)
-[![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-168%20passing-brightgreen.svg)](tests/)
+[![Version](https://img.shields.io/badge/version-V0.3.4-blue.svg)](VERSION)
+[![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](README.md)
+[![Tests](https://img.shields.io/badge/tests-209%20passing-brightgreen.svg)](tests/)
 
 ---
 
@@ -33,7 +33,7 @@ Every project accumulates bugs, features, reviews, tests, docs, and ops work. Th
 - **Safe pipe escape + intra-table blanks** — `--apply-safe-fixes` can merge/escape unescaped `|` in overwide rows and delete blank lines between table data rows (**not** inside fenced code blocks).
 - **Wiki cross-refs** — `[[BUG-001]]` syntax with dangling-reference detection in `check`.
 - **Archive** — `archive --older-than-days N` moves old completed rows to `task-list-archive-YYYYMM.md`.
-- **Tested** — 168 unit tests covering init, add, update, list, sections, from-json, notes-file, auto-check rollback, check, summary, standardize, archive, install-maintenance (including CLAUDE_PROJECT_DIR Stop-hook path + legacy relative-path upgrade), aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, maintenance-rule detection (including per-tool claim mismatch, rule duplication, non-portable hook paths, `.claude/` gitignore), schema-variant detection, timestamp validation, invalid-ID detection, non-standard-header rejection, archive ID non-reuse, pipe escape, wiki refs, status suggestions, case-insensitive section resolution, English locale, summary drift four-field comparison, rate precision cap, time-reverse detection, ID-order regression detection, duplicate-record detection, Codex hook path validation, section-order recommendations, and **preview-safety** (intra-table blanks, fenced-code exclusion, raw HTML including iframe, CommonMark backtick pairing).
+- **Tested** — 209 unit tests covering layered domain/parser/validator/maintenance modules plus init, add, update, list, sections, from-json, notes-file, auto-check rollback, check, summary, standardize, archive, install-maintenance (including CLAUDE_PROJECT_DIR Stop-hook path + legacy relative-path upgrade), aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, maintenance-rule detection (including per-tool claim mismatch, rule duplication, non-portable hook paths, `.claude/` gitignore), schema-variant detection, timestamp validation, invalid-ID detection, non-standard-header rejection, archive ID non-reuse, pipe escape, wiki refs, status suggestions, case-insensitive section resolution, English locale, summary drift four-field comparison, rate precision cap, time-reverse detection, ID-order regression detection, duplicate-record detection, Codex hook path validation, section-order recommendations, and **preview-safety** (intra-table blanks, fenced-code exclusion, raw HTML including iframe, CommonMark backtick pairing). Heading scans on write/migrate/check skip fenced examples; mixed dual+single files pass `--schema auto`.
 
 ### The Task List Standard
 
@@ -175,13 +175,13 @@ A project may legitimately keep a **compatible single-date schema** (`Done Date`
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-168 tests, all passing.
+209 tests, all passing.
 
 ### Project Structure
 
 ```
 skills-task-list-initialization/
-├── VERSION                                   # V0.3.3
+├── VERSION                                   # V0.3.4
 ├── skills/task-list-initialization/
 │   ├── SKILL.md                              # Skill definition
 │   ├── evals/
@@ -191,10 +191,11 @@ skills-task-list-initialization/
 │   │   ├── task-list-template.md             # Canonical templates
 │   │   └── maintenance-rule.md               # Session-end sync rule + Stop hook template
 │   └── scripts/
-│       ├── task_list_cli.py                  # CLI entry (re-exports)
-│       └── _tasklist/                        # Implementation package (_lib.py, _locale.py)
+│       ├── task_list_cli.py                  # CLI entry (re-exports public_api)
+│       └── _tasklist/                        # Implementation package (cli/parser/validator/locales/public_api/…)
 ├── tests/
-│   └── test_task_list_cli.py                 # Unit tests (168)
+│   ├── helpers.py                            # Shared CLI test helpers
+│   └── test_*.py                             # Unit tests (209; no file over 600 lines)
 ├── LICENSE                                   # MIT
 └── README.md
 ```
@@ -204,6 +205,17 @@ skills-task-list-initialization/
 [MIT](LICENSE) © 2026 fenix-wangminle.
 
 ### Changelog
+
+#### V0.3.4
+
+- Split the former `_lib.py` monolith into layered modules: `domain` / `parser` / `renderer` / `schemas` / `summary` / `validator` / `migration` / `maintenance` / `cli`; `_lib.py` removed
+- CLI entry uses explicit exports via `_tasklist/public_api.py` (formal compat list, including `detect_locale`; no stdlib star-import leaks); `_locale.py` is a compatibility re-export of `locales.py`
+- Heading scans (`add` / `summary --write` / `--migrate-schema` / `--apply-safe-fixes` / duplicate-section check) skip fenced code, so Markdown table examples cannot steal insert points or rewrite real rows
+- Mixed dual+single files pass `--schema auto`; `add` no longer rolls back a valid mixed ledger
+- `--from-json` rejects non-string fields; `escape_cell` strips CR/line-breaks and escapes backslashes; GFM-invalid separators and unpadded dates fail `check`
+- Archive merge refuses cross-schema column mismatch; unbraced `$CLAUDE_PROJECT_DIR` is recognized; `atomic_write` preserves file mode
+- Maintenance-rule text is a single source of truth with `references/maintenance-rule.md`; CLI tests split into `test_cli_*.py` plus module tests (no file over 600 lines)
+- `ruff check` clean on scripts and tests; **209** unit tests
 
 #### V0.3.3
 
@@ -260,7 +272,7 @@ skills-task-list-initialization/
 - **自动转义 `|` 与表内空行**——`--apply-safe-fixes` 可合并并转义导致列数错乱的未转义 `|`，并删除数据行之间的空行（**不改围栏代码块**）。
 - **条目互引**——`[[BUG-001]]` 语法，`check` 检测悬空引用。
 - **归档**——`archive --older-than-days N` 将旧的已完成记录移到 `task-list-archive-YYYYMM.md`。
-- **经过测试**——168 个单元测试，覆盖 init、add、update、list、sections、from-json、notes-file、写后校验回滚、check、summary、standardize、archive、install-maintenance（含 `CLAUDE_PROJECT_DIR` Stop hook 路径与旧相对路径升级）、分区别名与反向别名、标题空白容错、`--fix-only` 语义、维护规则声明一致性（按工具拆分、规则双写、非便携 hook、`.claude/` gitignore）与跨文件幂等、schema 变体检测、时间戳校验、非法 ID 检出、非标准表头拒绝、归档后 ID 不复用、管道符转义、互引检测、状态建议映射、分区大小写不敏感解析与英文 locale、摘要漂移四字段比较、完成率精度上限、时间倒置检测、ID 行序回退检测、重复记录检测、Codex hook 路径校验、章节顺序建议，以及**预览安全**（表内空行、围栏代码排除、含 iframe 的裸 HTML、CommonMark 反引号配对）。
+- **经过测试**——209 个单元测试，覆盖分层 domain/parser/validator/maintenance 模块以及 init、add、update、list、sections、from-json、notes-file、写后校验回滚、check、summary、standardize、archive、install-maintenance（含 `CLAUDE_PROJECT_DIR` Stop hook 路径与旧相对路径升级）、分区别名与反向别名、标题空白容错、`--fix-only` 语义、维护规则声明一致性（按工具拆分、规则双写、非便携 hook、`.claude/` gitignore）与跨文件幂等、schema 变体检测、时间戳校验、非法 ID 检出、非标准表头拒绝、归档后 ID 不复用、管道符转义、互引检测、状态建议映射、分区大小写不敏感解析与英文 locale、摘要漂移四字段比较、完成率精度上限、时间倒置检测、ID 行序回退检测、重复记录检测、Codex hook 路径校验、章节顺序建议，以及**预览安全**（表内空行、围栏代码排除、含 iframe 的裸 HTML、CommonMark 反引号配对）。写入/迁移/check 的标题扫描会跳过围栏内示例；混合 dual+single 文件在 `--schema auto` 下通过。
 
 ### 任务清单标准
 
@@ -400,13 +412,13 @@ python3 "$SKILL_CLI" standardize \
 python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
-168 个测试，全部通过。
+209 个测试，全部通过。
 
 ### 项目结构
 
 ```
 skills-task-list-initialization/
-├── VERSION                                   # V0.3.3
+├── VERSION                                   # V0.3.4
 ├── skills/task-list-initialization/
 │   ├── SKILL.md                              # 技能定义
 │   ├── evals/
@@ -417,9 +429,10 @@ skills-task-list-initialization/
 │   │   └── maintenance-rule.md               # 会话末同步规则 + Stop hook 模板
 │   └── scripts/
 │       ├── task_list_cli.py                  # CLI 入口（再导出）
-│       └── _tasklist/                        # 实现包（_lib.py、_locale.py）
+│       └── _tasklist/                        # 实现包（cli/parser/validator/locales/…）
 ├── tests/
-│   └── test_task_list_cli.py                 # 单元测试（168）
+│   ├── helpers.py                            # 测试公共助手
+│   └── test_*.py                             # 单元测试（209；单文件不超过 600 行）
 ├── LICENSE                                   # MIT
 └── README.md
 ```
@@ -429,6 +442,17 @@ skills-task-list-initialization/
 [MIT](LICENSE) © 2026 fenix-wangminle。
 
 ### 更新日志
+
+#### V0.3.4
+
+- 将原 `_lib.py` 巨石拆为分层模块：`domain` / `parser` / `renderer` / `schemas` / `summary` / `validator` / `migration` / `maintenance` / `cli`；删除 `_lib.py`
+- CLI 入口经 `_tasklist/public_api.py` 显式导出正式兼容清单（含 `detect_locale`；不含 stdlib 星号泄漏）；`_locale.py` 仅为 `locales.py` 的兼容再导出
+- 写入/摘要/迁移/safe-fix/重复章节检测的标题扫描全部跳过围栏代码，示例表格不能再劫持真实表
+- 混合 dual+single 文件在 `--schema auto` 下通过；`add` 不再对合法混合台账自我回滚
+- `--from-json` 拒绝非字符串字段；`escape_cell` 剥离 CR 并转义反斜杠；非法分隔行与非零填充日期会使 `check` 失败
+- 归档合并不允许跨 schema 列数错乱；识别无花括号 `$CLAUDE_PROJECT_DIR`；`atomic_write` 保留原文件权限
+- 维护规则正文与 `references/maintenance-rule.md` 单一来源；CLI 测试拆为 `test_cli_*.py` 与模块测试（单文件不超过 600 行）
+- `ruff check` 清零；**209** 个单元测试
 
 #### V0.3.3
 
