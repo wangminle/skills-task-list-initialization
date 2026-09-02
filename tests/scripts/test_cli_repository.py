@@ -68,6 +68,47 @@ class CliRepositoryTest(CliTestCase):
             # f1 must have been restored to its original content, not left as "new-a".
             self.assertEqual(f1.read_text(encoding="utf-8"), "original-a\n")
 
+    def test_commit_all_rollback_restores_crlf_bytes_exactly(self):
+        """BUG-090 (cross-platform pin): rollback must be byte-faithful for CRLF files.
+
+        `_restore` writes the snapshot through the binary atomic writer. The former
+        text-mode path re-translated newlines on Windows (`\\r\\n` → `\\r\\r\\n`).
+        POSIX cannot reproduce that translation, but this pin runs everywhere and
+        asserts bytes-in == bytes-out, so a Windows CI run catches any regression.
+        """
+        mod = load_cli_module()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            f1 = Path(tmp) / "task-list.md"
+            f2 = Path(tmp) / "b.md"
+            crlf_text = (
+                "# 任务跟踪列表\r\n\r\n## 代码 Bug\r\n\r\n"
+                "| ID | 动作 | 问题描述 | 发现时间 | 完成时间 | 状态 | 备注 |\r\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\r\n"
+                "| BUG-001 | 修复 | 登录失败 | 2026-08-01 09:00 | - | 待修复 | - |\r\n"
+            )
+            f1.write_bytes(crlf_text.encode("utf-8"))
+            snapshot = f1.read_bytes()
+            self.assertIn(b"\r\n", snapshot)
+            f2.write_bytes(b"original-b\r\n")
+
+            real_replace = os.replace
+
+            def flaky_replace(src, dst):
+                if Path(dst) == f2:
+                    raise OSError("simulated failure on second file")
+                return real_replace(src, dst)
+
+            with mock.patch("os.replace", side_effect=flaky_replace):
+                with self.assertRaises(OSError):
+                    mod.commit_all([
+                        (f1, crlf_text.replace("\r\n", "\n")),
+                        (f2, "new-b\n"),
+                    ])
+
+            # The rollback must reproduce the pre-transaction CRLF bytes exactly.
+            self.assertEqual(f1.read_bytes(), snapshot)
+
     def test_req13_install_maintenance_second_file_failure(self):
         """REQ-13 CLI path: fail the hook-script write (2nd planned file); the agent
         file (1st) must be rolled back to its pre-install state — no residual rule."""
@@ -98,7 +139,11 @@ class CliRepositoryTest(CliTestCase):
             args = argparse.Namespace(
                 file=str(ledger), with_hook=True, dry_run=False
             )
-            with mock.patch("os.replace", side_effect=flaky_replace):
+            # BUG-093: the installer refuses --with-hook when shutil.which("bash")
+            # finds nothing; pretend bash exists so this fault-injection test still
+            # reaches the os.replace failure on bash-less machines.
+            with mock.patch("os.replace", side_effect=flaky_replace), \
+                    mock.patch("shutil.which", return_value=str(Path(tmp) / "bash")):
                 # Capture the command's own prints so module-level tests stay silent
                 # (CHK-037 观察③: stray "已安装…" lines polluted the suite output).
                 with contextlib.redirect_stdout(io.StringIO()), \

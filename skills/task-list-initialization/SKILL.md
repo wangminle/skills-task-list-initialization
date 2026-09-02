@@ -5,7 +5,7 @@ description: Use when creating, standardizing, migrating, validating, or maintai
 
 # Task List Initialization
 
-> Skill version **V0.3.7**. Canonical string: repo root `VERSION`.
+> Skill version **V0.3.8**. Canonical string: repo root `VERSION`.
 
 ## Overview
 
@@ -19,7 +19,7 @@ The default model is intentionally small: a fixed header, task-type sections, an
 2. If no task list exists, create one from the standard template **in the user's language** (see Language below).
 3. If a task list exists, preserve records and normalize only with user approval.
 4. Use the standard categories and 7-column table unless project evidence calls for extensions.
-5. When the user wants future agents to keep the list updated, install maintenance rules (opt-in). Prefer `install-maintenance` (and `--with-hook` when they want the Stop-hook guarantee). The command follows the same file-selection logic and rule text as `references/maintenance-rule.md` (`CLAUDE.md` if it exists, else `AGENTS.md`, else create `CLAUDE.md`), matched to the task-list's language. Ask before installing. Stop hook commands use `${CLAUDE_PROJECT_DIR}` so they keep working when the session cwd is not the repo root; re-running `--with-hook` upgrades legacy relative paths.
+5. When the user wants future agents to keep the list updated, install maintenance rules (opt-in). Prefer `install-maintenance` (and `--with-hook` when they want the Stop-hook guarantee). The command follows the same file-selection logic and rule text as `references/maintenance-rule.md` (`CLAUDE.md` if it exists, else `AGENTS.md`, else create `CLAUDE.md`), matched to the task-list's language. Ask before installing. Stop hook commands use `${CLAUDE_PROJECT_DIR}` so they keep working when the session cwd is not the repo root; re-running `--with-hook` upgrades legacy relative paths. `--with-hook` needs a real `bash` on `PATH` (plain Windows ships none: Git Bash or WSL); without one the installer refuses outright (exit 1, nothing written) instead of installing a hook that can never run.
 6. Validate malformed/invalid ID formats, duplicate IDs, broken table rows, unsupported actions/statuses, invalid timestamps, summary drift, **and preview-breaking markup** (intra-table blank lines, raw HTML tags in cells, unclosed CommonMark code spans) before finishing. `check` passing is a preview gate, not only a schema gate.
 7. For a task list that has been used for a while, use `standardize` first. It defaults to diagnostics and reporting only; run repair only when the user explicitly asks for it or passes repair flags.
 
@@ -140,4 +140,4 @@ Safety behaviors to rely on even without the reference: writes roll back only wh
 - `references/task-list-template.md`: canonical Markdown templates for each profile.
 - `references/maintenance-rule.md`: canonical maintenance-rule text (Chinese and English), file-selection logic, language-matching guidance, and optional `Stop`-hook guarantee layer for installing into a project's `CLAUDE.md`/`AGENTS.md`.
 - `evals/evals.json`: skill-creator evaluation cases.
-- Repo root `VERSION`: current skill version string (`V0.3.7`).
+- Repo root `VERSION`: current skill version string (`V0.3.8`).

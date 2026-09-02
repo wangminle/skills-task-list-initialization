@@ -281,4 +281,10 @@ class CliBugs2Test(CliTestCase):
                 "add", "--file", str(target), "--section", "Bugs",
                 "--action", "Fix", "--description", "perm", "--status", "Pending Fix",
             )
-            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
+            if os.name == "posix":
+                self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
+            else:
+                # Windows tracks only the read-only bit; S_IMODE reports 0o666 for
+                # writable files, never 0o644. The BUG-068 guarantee that matters here
+                # is that the rewrite must not leave the file read-only.
+                self.assertTrue(target.stat().st_mode & stat.S_IWRITE)

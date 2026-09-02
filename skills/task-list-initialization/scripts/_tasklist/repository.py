@@ -85,6 +85,42 @@ def backup(path: Path) -> bytes | None:
         return None
 
 
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Atomically write raw *data* to *path* — byte-faithful, no newline translation.
+
+    Text-mode writes translate ``\\n`` to ``os.linesep`` on Windows, so restoring a
+    snapshot through ``atomic_write`` (decode → text write) corrupts CRLF files:
+    every rollback doubles ``\\r`` (``\\r\\n`` → ``\\r\\r\\n``). Rollbacks must
+    reproduce the pre-transaction bytes exactly, hence this binary twin.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing_mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
+    tmp = tempfile.NamedTemporaryFile(
+        mode="wb",
+        dir=str(path.parent),
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    try:
+        tmp.write(data)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        tmp.close()
+        os.chmod(tmp.name, existing_mode)
+        os.replace(tmp.name, path)
+    except BaseException:
+        try:
+            tmp.close()
+        except Exception:
+            pass
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+        raise
+
+
 def _restore(path: Path, snapshot: bytes | None) -> None:
     """Restore *path* to its pre-commit bytes (or delete it if it didn't exist)."""
     if snapshot is None:
@@ -93,7 +129,7 @@ def _restore(path: Path, snapshot: bytes | None) -> None:
         except FileNotFoundError:
             pass
         return
-    atomic_write(path, snapshot.decode("utf-8"))
+    _atomic_write_bytes(path, snapshot)
 
 
 def commit_all(plans: list[tuple[Path, str]]) -> None:

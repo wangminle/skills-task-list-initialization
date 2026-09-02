@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -11,6 +13,67 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from helpers import CliTestCase, load_cli_module  # noqa: E402
+
+
+def _find_bash() -> str:
+    """Locate a real bash executable.
+
+    On Windows, ``C:\\Windows\\System32\\bash.exe`` is the WSL launcher stub —
+    when WSL is not installed it exits non-zero and prints an install banner,
+    which masks what the hook actually does. Skip the system directories and
+    use the first real bash on PATH (e.g. Git Bash); POSIX keeps plain "bash".
+    """
+    if os.name != "nt":
+        return "bash"
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        low = entry.lower()
+        if "system32" in low or "syswow64" in low:
+            continue
+        candidate = Path(entry) / "bash.exe"
+        if candidate.is_file():
+            return str(candidate)
+    return "bash"
+
+
+@contextlib.contextmanager
+def _bash_visible_on_path():
+    """Temporarily prepend a PATH dir containing a dummy `bash` (BUG-093).
+
+    The installer probes ``shutil.which("bash")`` but never executes it during
+    install, so a no-op shim keeps the install-path tests green on machines
+    without a real bash (plain Windows). Hook EXECUTION tests still resolve a
+    real bash via ``_find_bash()`` and must stay outside this context.
+    """
+    with tempfile.TemporaryDirectory() as shim_tmp:
+        shim_dir = Path(shim_tmp)
+        if os.name == "nt":
+            (shim_dir / "bash.bat").write_bytes(b"@echo off\r\n")
+        else:
+            shim = shim_dir / "bash"
+            shim.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            shim.chmod(0o755)
+        old_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = f"{shim_dir}{os.pathsep}{old_path}"
+        try:
+            yield
+        finally:
+            os.environ["PATH"] = old_path
+
+
+@contextlib.contextmanager
+def _bash_missing_from_path():
+    """Temporarily strip PATH so ``shutil.which("bash")`` finds nothing.
+
+    The CLI subprocess is launched via an absolute interpreter path and is
+    stdlib-only, so an empty PATH exercises a genuine "no bash anywhere"
+    install attempt on every platform.
+    """
+    old_path = os.environ.get("PATH", "")
+    os.environ["PATH"] = ""
+    try:
+        yield
+    finally:
+        os.environ["PATH"] = old_path
 
 
 class CliMaintenanceTest(CliTestCase):
@@ -83,9 +146,10 @@ class CliMaintenanceTest(CliTestCase):
             settings = Path(tmp) / ".claude" / "settings.json"
             settings.parent.mkdir(parents=True)
             settings.write_text("{not-json KEEPME", encoding="utf-8")
-            result = self.run_cli(
-                "install-maintenance", "--file", str(target), "--with-hook", check=False,
-            )
+            with _bash_visible_on_path():
+                result = self.run_cli(
+                    "install-maintenance", "--file", str(target), "--with-hook", check=False,
+                )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("JSON", result.stdout + result.stderr)
             self.assertEqual("{not-json KEEPME", settings.read_text(encoding="utf-8"))
@@ -109,7 +173,8 @@ class CliMaintenanceTest(CliTestCase):
             target = Path(tmp) / "task-list.md"
             self.run_cli("init", "--output", str(target))
             (Path(tmp) / "AGENTS.md").write_text("# project\n", encoding="utf-8")
-            self.run_cli("install-maintenance", "--file", str(target), "--with-hook")
+            with _bash_visible_on_path():
+                self.run_cli("install-maintenance", "--file", str(target), "--with-hook")
             script = (Path(tmp) / ".claude" / "hooks" / "tasklist_sync_reminder.sh").read_text(
                 encoding="utf-8"
             )
@@ -123,9 +188,10 @@ class CliMaintenanceTest(CliTestCase):
             settings = Path(tmp) / ".claude" / "settings.json"
             settings.parent.mkdir(parents=True)
             settings.write_text('{"hooks": {"Stop": {}}}\n', encoding="utf-8")
-            result = self.run_cli(
-                "install-maintenance", "--file", str(target), "--with-hook", check=False,
-            )
+            with _bash_visible_on_path():
+                result = self.run_cli(
+                    "install-maintenance", "--file", str(target), "--with-hook", check=False,
+                )
             self.assertNotEqual(result.returncode, 0)
             self.assertNotIn("Traceback", result.stdout + result.stderr)
             self.assertFalse(
@@ -133,9 +199,10 @@ class CliMaintenanceTest(CliTestCase):
             )
             # hooks:null is normalized and install proceeds
             settings.write_text('{"hooks": null}\n', encoding="utf-8")
-            ok = self.run_cli(
-                "install-maintenance", "--file", str(target), "--with-hook",
-            )
+            with _bash_visible_on_path():
+                ok = self.run_cli(
+                    "install-maintenance", "--file", str(target), "--with-hook",
+                )
             self.assertEqual(ok.returncode, 0)
             loaded = json.loads(settings.read_text(encoding="utf-8"))
             self.assertIsInstance(loaded["hooks"]["Stop"], list)
@@ -145,7 +212,8 @@ class CliMaintenanceTest(CliTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "task-list.md"
             self.run_cli("init", "--output", str(target))
-            self.run_cli("install-maintenance", "--file", str(target), "--with-hook")
+            with _bash_visible_on_path():
+                self.run_cli("install-maintenance", "--file", str(target), "--with-hook")
             settings = json.loads(
                 (Path(tmp) / ".claude" / "settings.json").read_text(encoding="utf-8")
             )
@@ -156,7 +224,7 @@ class CliMaintenanceTest(CliTestCase):
             runtime = Path(tmp) / "runtime"
             runtime.mkdir()
             rel = subprocess.run(
-                ["bash", "-c", "bash .claude/hooks/tasklist_sync_reminder.sh"],
+                [_find_bash(), "-c", "bash .claude/hooks/tasklist_sync_reminder.sh"],
                 cwd=runtime,
                 input="{}",
                 text=True,
@@ -169,7 +237,7 @@ class CliMaintenanceTest(CliTestCase):
             # behind in the system-wide /tmp and makes every subsequent run silently exit 0
             # with no output, so the assertion below would flake.
             ok = subprocess.run(
-                ["bash", "-c", abs_cmd],
+                [_find_bash(), "-c", abs_cmd],
                 cwd=runtime,
                 input=json.dumps({"session_id": f"hook-cwd-test-{uuid.uuid4()}"}),
                 text=True,
@@ -203,9 +271,10 @@ class CliMaintenanceTest(CliTestCase):
                 }),
                 encoding="utf-8",
             )
-            result = self.run_cli(
-                "install-maintenance", "--file", str(target), "--with-hook",
-            )
+            with _bash_visible_on_path():
+                result = self.run_cli(
+                    "install-maintenance", "--file", str(target), "--with-hook",
+                )
             self.assertEqual(result.returncode, 0)
             self.assertIn("已升级", result.stdout)
             loaded = json.loads(settings_path.read_text(encoding="utf-8"))
@@ -213,11 +282,57 @@ class CliMaintenanceTest(CliTestCase):
             self.assertIn("CLAUDE_PROJECT_DIR", cmd)
             self.assertNotEqual(cmd, "bash .claude/hooks/tasklist_sync_reminder.sh")
             # Second run is idempotent skip (already CLAUDE_PROJECT_DIR).
-            again = self.run_cli(
-                "install-maintenance", "--file", str(target), "--with-hook",
-            )
+            with _bash_visible_on_path():
+                again = self.run_cli(
+                    "install-maintenance", "--file", str(target), "--with-hook",
+                )
             self.assertIn("已安装（跳过）", again.stdout)
             self.assertNotIn("已升级", again.stdout)
+
+    def test_install_maintenance_with_hook_refuses_without_bash(self):
+        # BUG-093: on bash-less machines (plain Windows) the old installer wrote a
+        # `bash ...` hook "successfully" that then failed on every Stop event. The
+        # installer must refuse up front and leave the project byte-identical.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            agent = Path(tmp) / "CLAUDE.md"
+            agent.write_text("# project\n", encoding="utf-8")
+            with _bash_missing_from_path():
+                result = self.run_cli(
+                    "install-maintenance", "--file", str(target), "--with-hook",
+                    check=False,
+                )
+                dry = self.run_cli(
+                    "install-maintenance", "--file", str(target), "--with-hook",
+                    "--dry-run", check=False,
+                )
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(dry.returncode, 1)
+            combined = result.stdout + result.stderr + dry.stdout + dry.stderr
+            self.assertIn("bash", combined)
+            self.assertIn("--with-hook", combined)
+            # Nothing was written: agent file unchanged, no hook artifacts at all.
+            self.assertEqual(agent.read_text(encoding="utf-8"), "# project\n")
+            self.assertFalse((Path(tmp) / ".claude").exists())
+
+    def test_install_maintenance_hook_installs_when_bash_on_path(self):
+        # Positive counterpart: with bash visible on PATH the hook installs
+        # normally — independent of whether the host itself provides bash.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            with _bash_visible_on_path():
+                result = self.run_cli(
+                    "install-maintenance", "--file", str(target), "--with-hook",
+                )
+            self.assertEqual(result.returncode, 0)
+            settings = json.loads(
+                (Path(tmp) / ".claude" / "settings.json").read_text(encoding="utf-8")
+            )
+            cmd = settings["hooks"]["Stop"][0]["hooks"][0]["command"]
+            self.assertIn("tasklist_sync_reminder.sh", cmd)
+            self.assertIn("CLAUDE_PROJECT_DIR", cmd)
 
     def test_detect_codex_hook_broken_path(self):
         """Codex hook with non-existent script path should be flagged as broken."""

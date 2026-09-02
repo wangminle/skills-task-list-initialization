@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
@@ -691,6 +692,14 @@ def command_install_maintenance(args: argparse.Namespace) -> int:
     locale = get_locale(detect_locale(text) if text else "zh")
     lang = locale.name
     m = T[lang]
+
+    # BUG-093: a Stop hook written on a machine without bash "installs successfully"
+    # and then fails on every Stop event (plain Windows ships no bash). Refuse the
+    # whole --with-hook request up front, before any file is touched — same
+    # fail-closed posture as a malformed settings.json.
+    if args.with_hook and shutil.which("bash") is None:
+        print(m["maint_hook_no_bash"], file=sys.stderr)
+        return 1
 
     # Pick agent file: CLAUDE.md > AGENTS.md > create CLAUDE.md
     claude = project_root / "CLAUDE.md"

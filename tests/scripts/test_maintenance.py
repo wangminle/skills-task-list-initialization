@@ -50,6 +50,21 @@ class MaintenanceSourceTest(unittest.TestCase):
         self.assertIn(HOOK_SCRIPT_NAME, TASKLIST_HOOK_COMMAND)
         self.assertIn("${CLAUDE_PROJECT_DIR}", TASKLIST_HOOK_COMMAND)
 
+    def test_hook_script_has_python_interpreter_fallback(self):
+        # On Windows, `python3` is often the Microsoft Store stub (non-zero exit,
+        # no output); a hardcoded python3 silently disables the hook and degrades
+        # the session guard to a global "default". Both locales must probe and
+        # fall back to `python`, and never invoke a bare hardcoded interpreter.
+        for lang in ("zh", "en"):
+            script = hook_script(lang)
+            self.assertIn(
+                "if python3 -c 'import sys' >/dev/null 2>&1; then PY=python3; else PY=python; fi",
+                script,
+            )
+            self.assertIn('"$PY" -c', script)
+            self.assertNotIn("| python3 -c", script)
+            self.assertNotIn("\npython3 -c", script)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -125,7 +125,11 @@ rather than shift field meanings. `add`/`update` wrap blacklisted raw HTML tags
   `--keyword`. Section aliases include ID prefixes (`CHK`, `ADJ`, …) and short
   Chinese names (`检查`, `调整`, …).
 - `install-maintenance` installs the session-end sync rule into
-  `CLAUDE.md`/`AGENTS.md` (idempotent); `--with-hook` also installs the Stop hook.
+  `CLAUDE.md`/`AGENTS.md` (idempotent); `--with-hook` also installs the Stop hook
+  and requires a real `bash` on `PATH` (plain Windows ships none: install Git Bash
+  or WSL first). The installer probes `shutil.which("bash")` up front and refuses —
+  exit 1, nothing written, `--dry-run` included — rather than installing a hook
+  that would fail on every Stop event.
 - `add --dry-run` prints only the row(s) that would be appended, not the whole file.
 - Invalid `--action` / `--status` errors list the allowed enum values.
 

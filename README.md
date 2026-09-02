@@ -1,13 +1,13 @@
 # Task List Initialization · 任务清单初始化
 
-**Version:** `V0.3.7`
+**Version:** `V0.3.8`
 
 **[English](#english)** | **[中文](#中文)**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-V0.3.7-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-V0.3.8-blue.svg)](VERSION)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](README.md)
-[![Tests](https://img.shields.io/badge/tests-286%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-290%20passing-brightgreen.svg)](tests/)
 
 ---
 
@@ -33,7 +33,7 @@ Every project accumulates bugs, features, reviews, tests, docs, and ops work. Th
 - **Safe pipe escape + intra-table blanks** — `--apply-safe-fixes` can merge/escape unescaped `|` in overwide rows and delete blank lines between table data rows (**not** inside fenced code blocks).
 - **Wiki cross-refs** — `[[BUG-001]]` syntax with dangling-reference detection in `check`.
 - **Archive** — `archive --older-than-days N` moves old completed rows to `task-list-archive-YYYYMM.md`.
-- **Tested** — 286 unit tests covering layered domain/parser/validator/maintenance modules plus init, add, update, list, sections, from-json, notes-file, auto-check rollback (baseline-aware: pre-existing issues don't block writes), check, summary, standardize, archive, install-maintenance (including CLAUDE_PROJECT_DIR Stop-hook path + legacy relative-path upgrade), aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, maintenance-rule detection (including per-tool claim mismatch, rule duplication, non-portable hook paths, `.claude/` gitignore), schema-variant detection, timestamp validation, invalid-ID detection, non-standard-header rejection, archive ID non-reuse, pipe escape, wiki refs, status suggestions, case-insensitive section resolution, English locale, summary drift four-field comparison, summary caliber policy (auto refuses to write on prefix/section conflicts), check prefix-misplacement warnings, width-anomalous-row exclusion from statistics, dash-as-status rejection, install-maintenance/archive fault-injection rollback, eval-meta placeholder guards, rate precision cap, time-reverse detection, ID-order regression detection, duplicate-record detection, Codex hook path validation, section-order recommendations, and **preview-safety** (intra-table blanks, fenced-code exclusion, per-cell-matched raw HTML including iframe, CommonMark backtick pairing), by-prefix omission of empty custom sections. Heading scans on write/migrate/check skip fenced examples; mixed dual+single files pass `--schema auto`.
+- **Tested** — 290 unit tests covering layered domain/parser/validator/maintenance modules plus init, add, update, list, sections, from-json, notes-file, auto-check rollback (baseline-aware: pre-existing issues don't block writes), check, summary, standardize, archive, install-maintenance (including CLAUDE_PROJECT_DIR Stop-hook path + legacy relative-path upgrade), aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, maintenance-rule detection (including per-tool claim mismatch, rule duplication, non-portable hook paths, `.claude/` gitignore), schema-variant detection, timestamp validation, invalid-ID detection, non-standard-header rejection, archive ID non-reuse, pipe escape, wiki refs, status suggestions, case-insensitive section resolution, English locale, summary drift four-field comparison, summary caliber policy (auto refuses to write on prefix/section conflicts), check prefix-misplacement warnings, width-anomalous-row exclusion from statistics, dash-as-status rejection, install-maintenance/archive fault-injection rollback, eval-meta placeholder guards, rate precision cap, time-reverse detection, ID-order regression detection, duplicate-record detection, Codex hook path validation, section-order recommendations, and **preview-safety** (intra-table blanks, fenced-code exclusion, per-cell-matched raw HTML including iframe, CommonMark backtick pairing), by-prefix omission of empty custom sections. Heading scans on write/migrate/check skip fenced examples; mixed dual+single files pass `--schema auto`.
 
 ### The Task List Standard
 
@@ -93,10 +93,10 @@ Bug completion uses `Fixed`; non-bug completion uses `Done`. Prefer `Todo` for g
 | `list` | Filter records by `--id` / `--status` / `--section` / `--keyword` |
 | `sections` | List section headings (`--format json`) |
 | `check` | Validate ID format, structure, enums & timestamps |
-| `summary` | Count records by section; `--write` rewrites the summary table (section-based counts — see note below) |
+| `summary` | Count records by section; `--write` rewrites the summary table under the default `auto` policy — refuses to write when prefix/section calibers conflict (see note below) |
 | `standardize` | Diagnose and optionally repair |
 | `archive` | Move old completed rows to an archive file |
-| `install-maintenance` | Install session-end sync rule (opt-in; `--with-hook` for Stop hook) |
+| `install-maintenance` | Install session-end sync rule (opt-in; `--with-hook` for Stop hook — requires bash on PATH) |
 
 ```bash
 SKILL_CLI=skills/task-list-initialization/scripts/task_list_cli.py
@@ -132,7 +132,7 @@ python3 "$SKILL_CLI" check --file task-list.md
 # Validate a single-date (legacy) file against its own schema
 python3 "$SKILL_CLI" check --file task-list.md --schema single
 
-# Recompute & write the summary table (counts by physical section)
+# Recompute & write the summary table (default auto policy; refuses on caliber conflict)
 python3 "$SKILL_CLI" summary --file task-list.md --write
 
 # Diagnose an existing list (report only, no edits)
@@ -165,7 +165,7 @@ Pick the smallest variant that fits. `development` is intended only when priorit
 
 It will not rename sections, move records, or rewrite duplicate IDs without your approval — those are semantic changes and appear as report recommendations.
 
-Every report also includes a **maintenance-rule status** section that detects whether the project has the session-end sync rule (`CLAUDE.md` / `AGENTS.md`) and the optional `Stop` hook installed. Prefer `install-maintenance` (opt-in; add `--with-hook` for the Stop-hook guarantee) when the user wants it installed — do not install without consent.
+Every report also includes a **maintenance-rule status** section that detects whether the project has the session-end sync rule (`CLAUDE.md` / `AGENTS.md`) and the optional `Stop` hook installed. Prefer `install-maintenance` (opt-in; add `--with-hook` for the Stop-hook guarantee) when the user wants it installed — do not install without consent. `--with-hook` requires a real `bash` on `PATH` (plain Windows ships none — install Git Bash or WSL first); the installer refuses without one rather than writing a hook that can never run.
 
 A project may legitimately keep a **compatible single-date schema** (`Done Date` / `完成日期`, `Found Date` / `发现日期`, or historical `Start Date` / `Plan Date`; 6-col, or 8-col development). `check`/`standardize` auto-detect and validate that shape (override with `--schema single|dual`). `--migrate-schema` upgrades losslessly-migrateable headers only: `Found Date` → Found (day precision kept, Done = `-`); `Done Date` → Done (Found = `-`); `Start Date` / `Plan Date` are refused with an explicit unmappable message and the file is left unchanged. When duplicate IDs are detected, the report recommends adding `ADJ-` records to document the old→new ID mapping rather than silently renumbering. When `--migrate-schema` hits a data row whose cell count doesn't match the header (almost always an unescaped literal `|` in a cell), it leaves the row untouched and surfaces a `migrate_warnings` list in `--fix-only` and `--format json` output instead of silently undercounting.
 
@@ -175,13 +175,13 @@ A project may legitimately keep a **compatible single-date schema** (`Done Date`
 python3 -m unittest discover -s tests/scripts -p 'test_*.py'
 ```
 
-286 tests, all passing.
+290 tests, all passing.
 
 ### Project Structure
 
 ```
 skills-task-list-initialization/
-├── VERSION                                   # V0.3.7
+├── VERSION                                   # V0.3.8
 ├── skills/task-list-initialization/
 │   ├── SKILL.md                              # Skill definition
 │   ├── evals/
@@ -199,7 +199,7 @@ skills-task-list-initialization/
 ├── tests/
 │   └── scripts/                               # Test suite (all test_*.py + shared helpers)
 │       ├── helpers.py                         # Shared CLI test helpers
-│       └── test_*.py                          # Unit tests (286; no file over 600 lines)
+│       └── test_*.py                          # Unit tests (290)
 ├── LICENSE                                   # MIT
 └── README.md
 ```
@@ -209,6 +209,14 @@ skills-task-list-initialization/
 [MIT](LICENSE) © 2026 fenix-wangminle.
 
 ### Changelog
+
+#### V0.3.8
+
+- BUG-089: Stop-hook template probes `python3 -c 'import sys'` and falls back to `python` — on Windows the Microsoft Store `python3` stub (non-zero exit, no output) silently disabled the hook and degraded the per-session guard to a single global `default`; `install-maintenance --with-hook` redeploys the fixed script and upgrades legacy relative commands to `${CLAUDE_PROJECT_DIR}` (idempotent)
+- BUG-090: rollback is byte-faithful — `_restore` writes the snapshot via a binary atomic writer instead of decoding back through text mode, which on Windows re-translated `\n` and corrupted CRLF files (`\r\n` → `\r\r\n`) on every `commit_all` rollback
+- BUG-092: `tests/scripts/test_evals_meta.py` lacked `from __future__ import annotations`, so its `Path | None` hint raised `TypeError` at import on Python 3.9 and took the whole suite down despite the advertised 3.8+ support — the suite now runs green on 3.9 / 3.13 / 3.14 (a repo-wide audit found no other missing deferred-annotation module, runtime-evaluated alias, or 3.9+-only API)
+- BUG-093: `install-maintenance --with-hook` probes `shutil.which("bash")` up front and refuses (exit 1, nothing written, `--dry-run` included) on machines without bash, instead of installing a Stop hook that fails on every trigger (plain Windows ships no bash); install-path tests pin both sides via a PATH shim so they stay green on bash-less hosts, and README / cli-reference / SKILL.md now state the bash requirement
+- Tests: hook-execution tests resolve a real bash on Windows (skipping the WSL launcher stub in System32); BUG-068 permission assertion is Windows-aware (read-only bit instead of mode bits); new regressions pin the interpreter fallback in both locales, the cross-platform byte-exact CRLF rollback, and the bash-probe refusal/install pair — **290** unit tests
 
 #### V0.3.7
 
@@ -244,7 +252,7 @@ skills-task-list-initialization/
 - Mixed dual+single files pass `--schema auto`; `add` no longer rolls back a valid mixed ledger
 - `--from-json` rejects non-string fields; `escape_cell` strips CR/line-breaks and escapes backslashes; GFM-invalid separators and unpadded dates fail `check`
 - Archive merge refuses cross-schema column mismatch; unbraced `$CLAUDE_PROJECT_DIR` is recognized; `atomic_write` preserves file mode
-- Maintenance-rule text is a single source of truth with `references/maintenance-rule.md`; CLI tests split into `test_cli_*.py` plus module tests (no file over 600 lines)
+- Maintenance-rule text is a single source of truth with `references/maintenance-rule.md`; CLI tests split into `test_cli_*.py` plus module tests
 - `ruff check` clean on scripts and tests; **209** unit tests
 
 #### V0.3.3
@@ -302,7 +310,7 @@ skills-task-list-initialization/
 - **自动转义 `|` 与表内空行**——`--apply-safe-fixes` 可合并并转义导致列数错乱的未转义 `|`，并删除数据行之间的空行（**不改围栏代码块**）。
 - **条目互引**——`[[BUG-001]]` 语法，`check` 检测悬空引用。
 - **归档**——`archive --older-than-days N` 将旧的已完成记录移到 `task-list-archive-YYYYMM.md`。
-- **经过测试**——286 个单元测试，覆盖分层 domain/parser/validator/maintenance 模块以及 init、add、update、list、sections、from-json、notes-file、写后校验回滚（基线感知：存量问题不阻断写入）、check、summary、standardize、archive、install-maintenance（含 `CLAUDE_PROJECT_DIR` Stop hook 路径与旧相对路径升级）、分区别名与反向别名、标题空白容错、`--fix-only` 语义、维护规则声明一致性（按工具拆分、规则双写、非便携 hook、`.claude/` gitignore）与跨文件幂等、schema 变体检测、时间戳校验、非法 ID 检出、非标准表头拒绝、归档后 ID 不复用、管道符转义、互引检测、状态建议映射、分区大小写不敏感解析与英文 locale、摘要漂移四字段比较、摘要双口径策略（前缀/分区冲突时 auto 拒绝写入）、check 前缀错位警告、列宽异常行统计排除、完成率精度上限、时间倒置检测（写入门禁+check 行级存量警告）、ID 行序回退检测、重复记录检测、Codex hook 路径校验、章节顺序建议，以及**预览安全**（表内空行、围栏代码排除、按单元格匹配的裸 HTML、CommonMark 反引号配对），by-prefix 空自定义节省略。写入/迁移/check 的标题扫描会跳过围栏内示例；混合 dual+single 文件在 `--schema auto` 下通过。
+- **经过测试**——290 个单元测试，覆盖分层 domain/parser/validator/maintenance 模块以及 init、add、update、list、sections、from-json、notes-file、写后校验回滚（基线感知：存量问题不阻断写入）、check、summary、standardize、archive、install-maintenance（含 `CLAUDE_PROJECT_DIR` Stop hook 路径与旧相对路径升级）、分区别名与反向别名、标题空白容错、`--fix-only` 语义、维护规则声明一致性（按工具拆分、规则双写、非便携 hook、`.claude/` gitignore）与跨文件幂等、schema 变体检测、时间戳校验、非法 ID 检出、非标准表头拒绝、归档后 ID 不复用、管道符转义、互引检测、状态建议映射、分区大小写不敏感解析与英文 locale、摘要漂移四字段比较、摘要双口径策略（前缀/分区冲突时 auto 拒绝写入）、check 前缀错位警告、列宽异常行统计排除、完成率精度上限、时间倒置检测（写入门禁+check 行级存量警告）、ID 行序回退检测、重复记录检测、Codex hook 路径校验、章节顺序建议，以及**预览安全**（表内空行、围栏代码排除、按单元格匹配的裸 HTML、CommonMark 反引号配对），by-prefix 空自定义节省略。写入/迁移/check 的标题扫描会跳过围栏内示例；混合 dual+single 文件在 `--schema auto` 下通过。
 
 ### 任务清单标准
 
@@ -360,10 +368,10 @@ Bug 完成态用 `已修复`，非 Bug 完成态用 `已完成`。通用未完�
 | `list` | 按 `--id` / `--status` / `--section` / `--keyword` 筛选记录 |
 | `sections` | 列出分区（`--format json`） |
 | `check` | 校验 ID 格式、结构、枚举与时间戳 |
-| `summary` | 按物理分区统计；`--write` 回写统计摘要（见下方口径说明） |
+| `summary` | 按物理分区统计；`--write` 默认 `auto` 口径，前缀/分区口径冲突时拒绝写入（见下方口径说明） |
 | `standardize` | 诊断并可选修复 |
 | `archive` | 将旧已完成记录移到归档文件 |
-| `install-maintenance` | 安装会话结束同步规则（可选；`--with-hook` 装 Stop hook） |
+| `install-maintenance` | 安装会话结束同步规则（可选；`--with-hook` 装 Stop hook——需 PATH 上有 bash） |
 
 ```bash
 SKILL_CLI=skills/task-list-initialization/scripts/task_list_cli.py
@@ -399,7 +407,7 @@ python3 "$SKILL_CLI" check --file task-list.md
 # 按单日期（旧）schema 校验
 python3 "$SKILL_CLI" check --file task-list.md --schema single
 
-# 重算并回写统计摘要（按物理分区计数）
+# 重算并回写统计摘要（默认 auto 口径，冲突时拒绝写入）
 python3 "$SKILL_CLI" summary --file task-list.md --write
 
 # 诊断已有清单（只出报告，不改文件）
@@ -432,7 +440,7 @@ python3 "$SKILL_CLI" standardize \
 
 未经你同意，它不会重命名章节、移动记录或重写重复 ID——这些属于语义变更，只会作为报告建议出现。
 
-每份报告还包含**维护规则状态**分区，检测项目是否已安装会话结束同步规则（`CLAUDE.md` / `AGENTS.md`）与可选 `Stop` hook。用户同意后优先用 `install-maintenance` 安装（可选 `--with-hook`）；未经同意不要安装。
+每份报告还包含**维护规则状态**分区，检测项目是否已安装会话结束同步规则（`CLAUDE.md` / `AGENTS.md`）与可选 `Stop` hook。用户同意后优先用 `install-maintenance` 安装（可选 `--with-hook`）；未经同意不要安装。`--with-hook` 要求 `PATH` 上有可用的 `bash`（纯 Windows 默认没有——请先安装 Git Bash 或 WSL）；探测不到时安装器整体拒绝，而不是写入一个永远无法运行的 hook。
 
 项目可以合法保留**兼容的单日期 schema**（`完成日期` / `发现日期`，以及历史的 `开始日期` / `规划日期`；6 列，或 8 列开发扩展）。`check`/`standardize` 自动识别并按此校验（可用 `--schema single|dual` 覆盖）。`--migrate-schema` 仅升级可无损迁移的表头：`发现日期` → 仅发现时间（保持日精度，完成时间=`-`）；`完成日期` → 仅完成时间（发现时间=`-`）；`开始日期` / `规划日期` 拒绝并给出「无法映射」说明，文件不变。检测到重复 ID 时，报告会建议新增 `ADJ-` 记录说明旧号→新号映射，而非静默重编号。`--migrate-schema` 遇到列数与表头不符的数据行（几乎总是单元格里未转义的 `|`）时，会保留原行并在 `--fix-only` / `--format json` 输出中以 `migrate_warnings` 列出，不再静默漏报。
 
@@ -442,13 +450,13 @@ python3 "$SKILL_CLI" standardize \
 python3 -m unittest discover -s tests/scripts -p 'test_*.py'
 ```
 
-286 个测试，全部通过。
+290 个测试，全部通过。
 
 ### 项目结构
 
 ```
 skills-task-list-initialization/
-├── VERSION                                   # V0.3.7
+├── VERSION                                   # V0.3.8
 ├── skills/task-list-initialization/
 │   ├── SKILL.md                              # 技能定义
 │   ├── evals/
@@ -466,7 +474,7 @@ skills-task-list-initialization/
 ├── tests/
 │   └── scripts/                               # 测试套件（全部 test_*.py 与公共助手）
 │       ├── helpers.py                         # 测试公共助手
-│       └── test_*.py                          # 单元测试（286；单文件不超过 600 行）
+│       └── test_*.py                          # 单元测试（290）
 ├── LICENSE                                   # MIT
 └── README.md
 ```
@@ -476,6 +484,14 @@ skills-task-list-initialization/
 [MIT](LICENSE) © 2026 fenix-wangminle。
 
 ### 更新日志
+
+#### V0.3.8
+
+- BUG-089：Stop hook 模板先探测 `python3 -c 'import sys'`，失败自动回退 `python`——Windows 上微软商店 `python3` 桩（exit 非零、无输出）会让 hook 静默失效，且每会话守卫退化为全局共享的 `default`；`install-maintenance --with-hook` 重新部署修复后的脚本，并把旧相对路径命令升级为 `${CLAUDE_PROJECT_DIR}`（幂等）
+- BUG-090：回滚改为字节级保真——`_restore` 走二进制原子写，不再解码后经文本模式重写；此前在 Windows 上会二次换行转换，CRLF 文件每次 `commit_all` 回滚都被掺入多余 `\r`（`\r\n` → `\r\r\n`）
+- BUG-092：`tests/scripts/test_evals_meta.py` 缺 `from __future__ import annotations`，`Path | None` 注解在 Python 3.9 导入期即抛 `TypeError` 并拖垮整个测试发现，与「3.8+ 全量通过」声明冲突——现已在 3.9 / 3.13 / 3.14 三环境全量通过（全仓审计确认无其他缺延期注解的模块、无运行期求值别名、无 3.9+ 专属 API）
+- BUG-093：`install-maintenance --with-hook` 前置探测 `shutil.which("bash")`，无 bash 的机器上整体拒绝（退出码 1、不写任何文件、`--dry-run` 同样拒绝），不再「装得上、每次触发必失败」（纯 Windows 默认无 bash）；安装路径测试以 PATH shim 双向固定、无 bash 主机保持全绿；README / cli-reference / SKILL.md 同步声明 bash 要求
+- 测试：hook 执行类用例在 Windows 上定位真实 bash（跳过 System32 的 WSL 启动器桩）；BUG-068 权限断言适配 Windows（只读位而非 mode 位）；新增双语模板解释器回退回归断言、跨平台 CRLF 回滚字节级回归与 bash 探测拒绝/安装对——**290** 个单元测试
 
 #### V0.3.7
 
@@ -511,7 +527,7 @@ skills-task-list-initialization/
 - 混合 dual+single 文件在 `--schema auto` 下通过；`add` 不再对合法混合台账自我回滚
 - `--from-json` 拒绝非字符串字段；`escape_cell` 剥离 CR 并转义反斜杠；非法分隔行与非零填充日期会使 `check` 失败
 - 归档合并不允许跨 schema 列数错乱；识别无花括号 `$CLAUDE_PROJECT_DIR`；`atomic_write` 保留原文件权限
-- 维护规则正文与 `references/maintenance-rule.md` 单一来源；CLI 测试拆为 `test_cli_*.py` 与模块测试（单文件不超过 600 行）
+- 维护规则正文与 `references/maintenance-rule.md` 单一来源；CLI 测试拆为 `test_cli_*.py` 与模块测试
 - `ruff check` 清零；**209** 个单元测试
 
 #### V0.3.3

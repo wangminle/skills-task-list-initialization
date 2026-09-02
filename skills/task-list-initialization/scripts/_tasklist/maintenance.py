@@ -105,21 +105,25 @@ If this session completed no work, do nothing and say nothing. If a `Stop` hook 
 """
 
 HOOK_SCRIPT_ZH = """#!/usr/bin/env bash
+# 若 python3 不可用（如 Windows 微软商店桩，exit 非零且无输出），回退到 python。
+if python3 -c 'import sys' >/dev/null 2>&1; then PY=python3; else PY=python; fi
 input="$(cat)"
-session_id="$(printf '%s' "$input" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("session_id") or "default")' 2>/dev/null || echo default)"
+session_id="$(printf '%s' "$input" | "$PY" -c 'import json,sys; print(json.load(sys.stdin).get("session_id") or "default")' 2>/dev/null || echo default)"
 guard="/tmp/claude-tasklist-sync-${session_id}"
 [ -f "$guard" ] && exit 0
 touch "$guard"
-python3 -c 'import json; print(json.dumps({"decision":"block","reason":"会话结束前请按 CLAUDE.md 的「会话结束任务同步」规则：若本次涉及任务完成，把新增条目与状态变更写入根目录 task-list.md 并在回复中告知用户；否则简短说明无需同步。本提醒每会话仅触发一次。"}, ensure_ascii=False))'
+"$PY" -c 'import json; print(json.dumps({"decision":"block","reason":"会话结束前请按 CLAUDE.md 的「会话结束任务同步」规则：若本次涉及任务完成，把新增条目与状态变更写入根目录 task-list.md 并在回复中告知用户；否则简短说明无需同步。本提醒每会话仅触发一次。"}, ensure_ascii=False))'
 """
 
 HOOK_SCRIPT_EN = """#!/usr/bin/env bash
+# Fall back to python when python3 is unusable (e.g. the Windows Store stub: non-zero exit, no output).
+if python3 -c 'import sys' >/dev/null 2>&1; then PY=python3; else PY=python; fi
 input="$(cat)"
-session_id="$(printf '%s' "$input" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("session_id") or "default")' 2>/dev/null || echo default)"
+session_id="$(printf '%s' "$input" | "$PY" -c 'import json,sys; print(json.load(sys.stdin).get("session_id") or "default")' 2>/dev/null || echo default)"
 guard="/tmp/claude-tasklist-sync-${session_id}"
 [ -f "$guard" ] && exit 0
 touch "$guard"
-python3 -c 'import json; print(json.dumps({"decision":"block","reason":"Before this session ends, follow the Session-end Task Sync rule in CLAUDE.md: if this session completed work, sync new entries and status changes into the root task-list.md and tell the user in your reply; otherwise briefly state there is nothing to sync. This reminder fires once per session."}))'
+"$PY" -c 'import json; print(json.dumps({"decision":"block","reason":"Before this session ends, follow the Session-end Task Sync rule in CLAUDE.md: if this session completed work, sync new entries and status changes into the root task-list.md and tell the user in your reply; otherwise briefly state there is nothing to sync. This reminder fires once per session."}))'
 """
 
 TASKLIST_HOOK_COMMAND = (

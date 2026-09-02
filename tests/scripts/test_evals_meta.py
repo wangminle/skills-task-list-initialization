@@ -7,6 +7,8 @@ claim about the file's state (e.g. "legacy single-date schema") — the fixture 
 exhibits that state.
 """
 
+from __future__ import annotations
+
 import json
 import subprocess
 import sys

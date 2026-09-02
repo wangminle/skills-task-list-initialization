@@ -90,18 +90,20 @@ If this session completed no work, do nothing and say nothing. If a `Stop` hook 
 
 ```bash
 #!/usr/bin/env bash
+# 若 python3 不可用（如 Windows 微软商店桩，exit 非零且无输出），回退到 python。
+if python3 -c 'import sys' >/dev/null 2>&1; then PY=python3; else PY=python; fi
 input="$(cat)"
-session_id="$(printf '%s' "$input" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("session_id") or "default")' 2>/dev/null || echo default)"
+session_id="$(printf '%s' "$input" | "$PY" -c 'import json,sys; print(json.load(sys.stdin).get("session_id") or "default")' 2>/dev/null || echo default)"
 guard="/tmp/claude-tasklist-sync-${session_id}"
 [ -f "$guard" ] && exit 0
 touch "$guard"
-python3 -c 'import json; print(json.dumps({"decision":"block","reason":"会话结束前请按 CLAUDE.md 的「会话结束任务同步」规则：若本次涉及任务完成，把新增条目与状态变更写入根目录 task-list.md 并在回复中告知用户；否则简短说明无需同步。本提醒每会话仅触发一次。"}, ensure_ascii=False))'
+"$PY" -c 'import json; print(json.dumps({"decision":"block","reason":"会话结束前请按 CLAUDE.md 的「会话结束任务同步」规则：若本次涉及任务完成，把新增条目与状态变更写入根目录 task-list.md 并在回复中告知用户；否则简短说明无需同步。本提醒每会话仅触发一次。"}, ensure_ascii=False))'
 ```
 
 英文项目的 `reason` 文案 · English `reason` text (for English projects):
 
 ```bash
-python3 -c 'import json; print(json.dumps({"decision":"block","reason":"Before this session ends, follow the Session-end Task Sync rule in CLAUDE.md: if this session completed work, sync new entries and status changes into the root task-list.md and tell the user in your reply; otherwise briefly state there is nothing to sync. This reminder fires once per session."}))'
+"$PY" -c 'import json; print(json.dumps({"decision":"block","reason":"Before this session ends, follow the Session-end Task Sync rule in CLAUDE.md: if this session completed work, sync new entries and status changes into the root task-list.md and tell the user in your reply; otherwise briefly state there is nothing to sync. This reminder fires once per session."}))'
 ```
 
 边界说明 · Boundaries:
@@ -109,6 +111,7 @@ python3 -c 'import json; print(json.dumps({"decision":"block","reason":"Before t
 - hook 只保证「提醒时机」，**不替 agent 写文件**；实际写入仍由 agent 按第 2 步规则正文完成。The hook only guarantees the reminder timing; it does not write the file for the agent.
 - `session_id` 守卫保证每会话只 block 一次，避免死循环。The `session_id` guard blocks once per session to avoid loops.
 - `settings.json` / hook 通常需**重启会话**才生效；安装后告知用户开新会话实测。`settings.json` / hook usually need a session restart; tell the user to start a new session to test.
+- **解释器回退**：脚本先探测 `python3 -c 'import sys'`，失败则用 `python`。Windows 上 `python3` 常是微软商店跳转桩（exit 非零、无输出），若硬编码 `python3`，hook 会静默失效且 `session_id` 守卫退化为全局 `default`。Interpreter fallback: probe `python3` first, fall back to `python` — on Windows `python3` is often the Microsoft Store stub, and hardcoding it silently disables the hook and degrades the per-session guard to a global `default`.
 
 ## 4. 安装时的注意 · Install notes
 
