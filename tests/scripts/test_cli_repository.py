@@ -35,6 +35,24 @@ class CliRepositoryTest(CliTestCase):
 
             self.assertEqual(target.read_bytes(), original_bytes)
 
+    def test_atomic_write_is_byte_faithful_lf(self):
+        """atomic_write must emit \\n verbatim, never the platform line separator.
+
+        Text mode with newline=None translates \\n to os.linesep, so a Windows run
+        wrote CRLF into the bash hook script — "fi\\r" is not "fi" and the Stop
+        hook died at parse time (BUG-105). The rollback twin already writes bytes
+        (BUG-090); the forward write must agree with it so commit/rollback
+        round-trips stay byte-stable on every OS.
+        """
+        mod = load_cli_module()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "tasklist_sync_reminder.sh"
+            text = "#!/usr/bin/env bash\nif true; then :; fi\n"
+            mod.atomic_write(target, text)
+            self.assertEqual(target.read_bytes(), text.encode("utf-8"))
+            self.assertNotIn(b"\r", target.read_bytes())
+
     def test_commit_all_restores_on_partial_failure(self):
         """commit_all must roll back already-committed files when a later one fails.
 

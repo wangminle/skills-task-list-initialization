@@ -309,6 +309,10 @@ def _format_rate(done: int, total: int) -> str:
     return f"{r}%"
 
 def render_summary_with_counts(rows: list[tuple[str, int, int, int]], locale: Locale) -> str:
+    # Lazy import: renderer imports summary helpers at module level, so a top-level
+    # reverse import would be circular. At call time both modules are fully loaded.
+    from .renderer import escape_cell
+
     cols = list(locale.summary_columns)
     lines = [
         f"## {locale.summary_section}",
@@ -318,7 +322,14 @@ def render_summary_with_counts(rows: list[tuple[str, int, int, int]], locale: Lo
     ]
     total_all = done_all = pending_all = 0
     for title, total, done, pending in rows:
-        lines.append(f"| {title} | {total} | {done} | {pending} | {_format_rate(done, total)} |")
+        # BUG-109: a category title containing `|` (legal in `## 研究 | 调试`) must be
+        # escaped as `\|` on write, or the row gains a phantom column — a 5-column
+        # summary table with a 6-cell row whose numbers render shifted and parse as
+        # the wrong fields. escape_cell round-trips with split_cells, so caliber
+        # detection and drift comparison still see the original title.
+        lines.append(
+            f"| {escape_cell(title)} | {total} | {done} | {pending} | {_format_rate(done, total)} |"
+        )
         total_all += total
         done_all += done
         pending_all += pending

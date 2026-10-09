@@ -87,6 +87,8 @@ docs/discussion/
 CLAUDE.md
 AGENTS.md
 task-list.md
+# 写锁 sidecar（file_lock 正常残留，见 BUG-099；消费端也应忽略 *.md.lock）
+task-list.md.lock
 task-list-archive-*.md
 task-list-*-report.md
 

@@ -1,13 +1,13 @@
 # Task List Initialization · 任务清单初始化
 
-**Version:** `V0.3.8`
+**Version:** `V0.3.9`
 
 **[English](#english)** | **[中文](#中文)**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-V0.3.8-blue.svg)](VERSION)
+[![Version](https://img.shields.io/badge/version-V0.3.9-blue.svg)](VERSION)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](README.md)
-[![Tests](https://img.shields.io/badge/tests-290%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-350%20passing-brightgreen.svg)](tests/)
 
 ---
 
@@ -33,7 +33,7 @@ Every project accumulates bugs, features, reviews, tests, docs, and ops work. Th
 - **Safe pipe escape + intra-table blanks** — `--apply-safe-fixes` can merge/escape unescaped `|` in overwide rows and delete blank lines between table data rows (**not** inside fenced code blocks).
 - **Wiki cross-refs** — `[[BUG-001]]` syntax with dangling-reference detection in `check`.
 - **Archive** — `archive --older-than-days N` moves old completed rows to `task-list-archive-YYYYMM.md`.
-- **Tested** — 290 unit tests covering layered domain/parser/validator/maintenance modules plus init, add, update, list, sections, from-json, notes-file, auto-check rollback (baseline-aware: pre-existing issues don't block writes), check, summary, standardize, archive, install-maintenance (including CLAUDE_PROJECT_DIR Stop-hook path + legacy relative-path upgrade), aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, maintenance-rule detection (including per-tool claim mismatch, rule duplication, non-portable hook paths, `.claude/` gitignore), schema-variant detection, timestamp validation, invalid-ID detection, non-standard-header rejection, archive ID non-reuse, pipe escape, wiki refs, status suggestions, case-insensitive section resolution, English locale, summary drift four-field comparison, summary caliber policy (auto refuses to write on prefix/section conflicts), check prefix-misplacement warnings, width-anomalous-row exclusion from statistics, dash-as-status rejection, install-maintenance/archive fault-injection rollback, eval-meta placeholder guards, rate precision cap, time-reverse detection, ID-order regression detection, duplicate-record detection, Codex hook path validation, section-order recommendations, and **preview-safety** (intra-table blanks, fenced-code exclusion, per-cell-matched raw HTML including iframe, CommonMark backtick pairing), by-prefix omission of empty custom sections. Heading scans on write/migrate/check skip fenced examples; mixed dual+single files pass `--schema auto`.
+- **Tested** — 350 unit tests covering layered domain/parser/validator/maintenance modules plus init, add, update, list, sections, from-json, notes-file, auto-check rollback (baseline-aware: pre-existing issues don't block writes), check, summary, standardize, archive, install-maintenance (including CLAUDE_PROJECT_DIR Stop-hook path + legacy relative-path upgrade), aliases, reverse aliases, heading-whitespace tolerance, `--fix-only` semantics, maintenance-rule detection (including per-tool claim mismatch, rule duplication, non-portable hook paths, `.claude/` gitignore, idempotent re-runs), schema-variant detection, timestamp validation, invalid-ID detection, non-standard-header rejection, archive ID non-reuse, pipe escape, wiki refs, status suggestions, case-insensitive section resolution, English locale, summary drift four-field comparison, summary caliber policy (auto refuses to write on prefix/section conflicts), check prefix-misplacement warnings, width-anomalous-row exclusion from statistics, dash-as-status rejection, install-maintenance/archive fault-injection rollback, eval-meta placeholder guards, rate precision cap, time-reverse detection, ID-order regression detection, duplicate-record detection, Codex hook path validation, section-order recommendations, and **preview-safety** (intra-table blanks, fenced-code exclusion, per-cell-matched raw HTML including iframe, CommonMark backtick pairing, delimiter-row adjacency/width), by-prefix omission of empty custom sections, report-path identity refusal (fleet/standardize `--report` vs an input ledger), concurrent shared-archive locking, pipe-escaped summary category titles, overwide-row ID registration, empty-summary completeness gate (a summary reduced to its header and delimiter fails `check` naming the missing category). Heading scans on write/migrate/check skip fenced examples; mixed dual+single files pass `--schema auto`.
 
 ### The Task List Standard
 
@@ -97,6 +97,7 @@ Bug completion uses `Fixed`; non-bug completion uses `Done`. Prefer `Todo` for g
 | `standardize` | Diagnose and optionally repair |
 | `archive` | Move old completed rows to an archive file |
 | `install-maintenance` | Install session-end sync rule (opt-in; `--with-hook` for Stop hook — requires bash on PATH) |
+| `fleet` | Batch-inspect every `task-list.md` under a root directory (`--exclude` globs, `--apply-safe-fixes`, `--format json`, `--report`; exit 1 if any file fails or the scan is incomplete; exit 2 if the root is missing or the report cannot be written) |
 
 ```bash
 SKILL_CLI=skills/task-list-initialization/scripts/task_list_cli.py
@@ -175,18 +176,20 @@ A project may legitimately keep a **compatible single-date schema** (`Done Date`
 python3 -m unittest discover -s tests/scripts -p 'test_*.py'
 ```
 
-290 tests, all passing.
+350 tests, all passing.
 
 ### Project Structure
 
 ```
 skills-task-list-initialization/
-├── VERSION                                   # V0.3.8
+├── VERSION                                   # V0.3.9
 ├── skills/task-list-initialization/
 │   ├── SKILL.md                              # Skill definition
 │   ├── evals/
 │   │   ├── evals.json                        # Task-execution eval cases (fixtures wired)
 │   │   ├── trigger-evals.json                # Trigger/behavior eval matrix (14 cases)
+│   │   ├── run-evals.py                      # Headless real-agent eval runner
+│   │   ├── aggregate-benchmark.py            # Run-telemetry aggregation (benchmark.json)
 │   │   └── fixtures/                         # Eval precondition fixtures
 │   ├── references/
 │   │   ├── task-list-standard.md             # Recommended field/schema standard
@@ -199,7 +202,7 @@ skills-task-list-initialization/
 ├── tests/
 │   └── scripts/                               # Test suite (all test_*.py + shared helpers)
 │       ├── helpers.py                         # Shared CLI test helpers
-│       └── test_*.py                          # Unit tests (290)
+│       └── test_*.py                          # Unit tests (350)
 ├── LICENSE                                   # MIT
 └── README.md
 ```
@@ -209,6 +212,27 @@ skills-task-list-initialization/
 [MIT](LICENSE) © 2026 fenix-wangminle.
 
 ### Changelog
+
+#### V0.3.9
+
+- BUG-111: an existing summary containing only its header and delimiter no longer bypasses missing-category checks; removing all summary data rows from a ledger now fails `check`. Ledgers without the optional summary still pass. Four new CLI regressions cover Chinese/English complete templates, valid counting policies, the absent-summary control, and `summary --write` recovery — **350** unit tests.
+- DEV-030: new `fleet` batch-inspection subcommand — point it at a root directory and it recursively finds every `task-list.md`, runs the full per-file diagnosis (`check` + `standardize` diagnostics + maintenance-rule status, each in the file's own language), and prints a per-file table plus aggregate report; `--exclude` globs skip backup/eval/runtime trees (`.git`/`node_modules`/`.stversions` excluded by default), `--apply-safe-fixes` repairs in place under the write lock and re-checks, `--format json` / `--report` feed automation; exit codes (0 pass or empty tree / 1 a file fails, one file's diagnosis errors, or the scan is incomplete / 2 missing root or the report cannot be written) suit cron and CI health gates — the institutionalized replacement for hand-rolled multi-project check loops
+- DEV-031: cross-process write lock — every write command (`add`/`update`/`archive`/`summary --write`/`standardize` repair/`init`/`fleet --apply-safe-fixes`) holds an exclusive advisory lock on a `task-list.md.lock` sidecar (POSIX `flock`, Windows `msvcrt`; 10s timeout with localized `lock_timeout`, auto-released on process death, dry-run and read-only commands never lock), closing the read-modify-write race that let two concurrent sessions mint duplicate IDs
+- DEV-033: custom-section table constraint — a table outside the standard sections whose first column holds strict task IDs (`^[A-Z]+-\d{3,}$`) but has no recognized record header is now a `check` **error**; agents can no longer improvise record tables with pseudo-status columns (the field incident: a review-log section using P2/P3 as 状态)
+- DEV-032: precision-aware time-inversion comparison — both sides timestamped → minute-level compare; either side date-only (legacy single→dual-date migration residue) → calendar-day compare only, so same-day pairs no longer warn forever and every remaining inversion is a real one (BUG-094 additionally keeps explicit date-only writes at day precision on disk, so the tool itself never manufactures one)
+- BUG-094: explicit date-only `--found-time` / `--completed-time` / `--date` values now land verbatim (`YYYY-MM-DD`, no `00:00` padding) — the padded cell used to create a permanent same-day "inversion" that check flagged forever and that even blocked later notes-only updates via the write-path rollback
+- BUG-095/BUG-096: `fleet --apply-safe-fixes` isolates per-file failures (lock timeout or I/O error → status=error entry, sweep continues, exit code stays non-zero) instead of aborting the whole sweep with a traceback; the Python 3.9+ `Path.is_relative_to` call is gone, restoring the 3.8+ compatibility promise (AST-level regression guard included)
+- BUG-097/BUG-100: the custom-section gate validates a *supported record schema* (any registered dual/single-date header shape) rather than "has some header" — a pseudo header like `| ID | 问题 | 结论 |` can no longer smuggle ID rows past per-row validation into the by-prefix summary; smuggled rows still register their identities and `[[refs]]` globally, so cross-table duplicate IDs are reported, refs to smuggled-only IDs are not dangling, and two-digit ID shapes are flagged
+- BUG-098/BUG-099/BUG-101: fleet output & lock hardening — empty-tree `--format json` stays parseable JSON; the `--report` file lists user `--exclude` patterns and escapes `|` in paths; unreadable directories fail the sweep loudly (`scan_errors`, exit 1) instead of a fake all-pass; an unwritable `--report` path exits 2 with a localized message; locking a missing target no longer creates its parent directory or a stray sidecar; lock-creation failures report a localized message naming the ledger; the lock-timeout message names the ledger path, not the internal `.lock` sidecar; `task-list.md.lock` is gitignored here (consumers should ignore `*.md.lock` too)
+- Tests: 12 new regressions covering the BUG-094…101 batch (day-precision landing + post-write check + follow-up update, per-file lock isolation, missing-target side effects, read-only-directory lock error, pseudo-header smuggling, smuggled identity/ref semantics, empty-tree JSON, report excludes / unwritable path / pipe escaping, unreadable-dir disclosure, 3.9+-API AST guard, mocked Windows msvcrt lock branch, English-locale fleet matrix) — **324** unit tests
+- BUG-102/BUG-103/BUG-104: one project's undecodable maintenance file (`CLAUDE.md` and the same class of sibling files) is recorded as `status=error` and the sweep continues, so JSON still contains the other projects; an empty tree in the default text mode still writes and overwrites `--report`; report paths go through `escape_cell`, so a name that contains both a backslash and a pipe no longer splits a column — **327** unit tests
+- BUG-105: `atomic_write` emits `\n` verbatim instead of translating to the platform line separator — a Windows-side install had written CRLF into the bash hook script (`fi\r` is not `fi`; the Stop hook died at parse time), and the installer's idempotency check compared through `read_text()`, whose universal-newline read masked the corruption as "equal to template". Writes are now byte-faithful LF (matching the BUG-090 rollback twin) and the check compares raw bytes, so re-running `install-maintenance --with-hook` repairs a corrupted script and says so — **329** unit tests
+- BUG-106: `fleet --report` and `standardize --report` refuse (exit 2, nothing written, ledger bytes untouched) when the report path resolves to the same file as an input ledger — relative/`..`/symlink aliases are collapsed via `resolve()` before comparing; for `fleet` the check runs before the sweep, so a report clash also suppresses `--apply-safe-fixes` repairs instead of repairing a file the report is about to overwrite
+- BUG-107: `archive` holds a second lock, on the archive file itself, from its first read through commit (lock order always main → archive; only nested-lock command) — two different main ledgers archiving concurrently into one shared archive used to both read the archive before either wrote, so the later commit silently dropped the other side's records; duplicate-ID detection now runs inside the critical section on fresh data, and mutual cross-archiving degrades to a clean `lock_timeout`, never data loss — pinned by a barrier-synchronized two-process regression verified to fail on the unfixed code
+- BUG-108: `check` fails on a record-table header whose GFM delimiter row is missing or whose column count differs from the header (CommonMark requires the delimiter IMMEDIATELY after the header with the same width; otherwise the whole table renders as plain text in preview) — line numbers reported for both cases, fenced example tables never count, and `add` refuses to append into the broken section (naming the line) while other sections in the same file stay writable with the defect disclosed as residual
+- BUG-109: summary tables escape `|` in category titles (`研究 \| 调试`), so a legal custom heading like `## 研究 | 调试` no longer produces a 6-cell row in a 5-column table with shifted numbers; `check` now flags legacy width-broken summary rows and categories missing from the written table (shape first, numbers second; conservative when the caliber is ambiguous/stale)
+- BUG-110: width-anomalous rows still register their strict ID — a duplicate ID hidden in an overwide row is now reported, and a `[[ref]]` to an ID that only exists in an overwide row is no longer falsely dangling — while such rows stay excluded from completion-rate statistics
+- Tests: 17 new regressions in `tests/scripts/test_cli_bugfix_106_110.py` (report-overwrite refusal + dotted alias + repair-abort + distinct-path control, standardize report clash, two-process concurrent archive with a `commit_all` rendezvous barrier, separator missing/width/blank-line/fenced-exempt/add-refusal/add-healthy-section, pipe-title write + idempotency + legacy width + missing category, overwide-row duplicate + no-false-dangling) — **346** unit tests
 
 #### V0.3.8
 
@@ -310,7 +334,7 @@ skills-task-list-initialization/
 - **自动转义 `|` 与表内空行**——`--apply-safe-fixes` 可合并并转义导致列数错乱的未转义 `|`，并删除数据行之间的空行（**不改围栏代码块**）。
 - **条目互引**——`[[BUG-001]]` 语法，`check` 检测悬空引用。
 - **归档**——`archive --older-than-days N` 将旧的已完成记录移到 `task-list-archive-YYYYMM.md`。
-- **经过测试**——290 个单元测试，覆盖分层 domain/parser/validator/maintenance 模块以及 init、add、update、list、sections、from-json、notes-file、写后校验回滚（基线感知：存量问题不阻断写入）、check、summary、standardize、archive、install-maintenance（含 `CLAUDE_PROJECT_DIR` Stop hook 路径与旧相对路径升级）、分区别名与反向别名、标题空白容错、`--fix-only` 语义、维护规则声明一致性（按工具拆分、规则双写、非便携 hook、`.claude/` gitignore）与跨文件幂等、schema 变体检测、时间戳校验、非法 ID 检出、非标准表头拒绝、归档后 ID 不复用、管道符转义、互引检测、状态建议映射、分区大小写不敏感解析与英文 locale、摘要漂移四字段比较、摘要双口径策略（前缀/分区冲突时 auto 拒绝写入）、check 前缀错位警告、列宽异常行统计排除、完成率精度上限、时间倒置检测（写入门禁+check 行级存量警告）、ID 行序回退检测、重复记录检测、Codex hook 路径校验、章节顺序建议，以及**预览安全**（表内空行、围栏代码排除、按单元格匹配的裸 HTML、CommonMark 反引号配对），by-prefix 空自定义节省略。写入/迁移/check 的标题扫描会跳过围栏内示例；混合 dual+single 文件在 `--schema auto` 下通过。
+- **经过测试**——350 个单元测试，覆盖分层 domain/parser/validator/maintenance 模块以及 init、add、update、list、sections、from-json、notes-file、写后校验回滚（基线感知：存量问题不阻断写入）、check、summary、standardize、archive、install-maintenance（含 `CLAUDE_PROJECT_DIR` Stop hook 路径与旧相对路径升级）、分区别名与反向别名、标题空白容错、`--fix-only` 语义、维护规则声明一致性（按工具拆分、规则双写、非便携 hook、`.claude/` gitignore）与跨文件幂等、schema 变体检测、时间戳校验、非法 ID 检出、非标准表头拒绝、归档后 ID 不复用、管道符转义、互引检测、状态建议映射、分区大小写不敏感解析与英文 locale、摘要漂移四字段比较、摘要双口径策略（前缀/分区冲突时 auto 拒绝写入）、check 前缀错位警告、列宽异常行统计排除、`状态=-` 拒绝、install-maintenance/archive 故障注入回滚、evals 元数据占位符守卫、完成率精度上限、时间倒置检测（写入门禁+check 行级存量警告）、ID 行序回退检测、重复记录检测、Codex hook 路径校验、章节顺序建议，以及**预览安全**（表内空行、围栏代码排除、按单元格匹配的裸 HTML、CommonMark 反引号配对、分隔行邻接与列宽），by-prefix 空自定义节省略、报告路径身份拒绝（fleet/standardize `--report` 与输入台账为同一文件即拒绝）、共享归档并发锁、摘要分类标题管道转义、宽行 ID 登记、空摘要完整性门禁（只剩表头与分隔行的摘要会被 `check` 点名缺失分类）。写入/迁移/check 的标题扫描会跳过围栏内示例；混合 dual+single 文件在 `--schema auto` 下通过。
 
 ### 任务清单标准
 
@@ -372,6 +396,7 @@ Bug 完成态用 `已修复`，非 Bug 完成态用 `已完成`。通用未完�
 | `standardize` | 诊断并可选修复 |
 | `archive` | 将旧已完成记录移到归档文件 |
 | `install-maintenance` | 安装会话结束同步规则（可选；`--with-hook` 装 Stop hook——需 PATH 上有 bash） |
+| `fleet` | 批量巡检根目录下所有 `task-list.md`（`--exclude` glob、`--apply-safe-fixes`、`--format json`、`--report`；任一文件失败或扫描不完整时退出码为 1；根目录不存在或报告写不进去时为 2） |
 
 ```bash
 SKILL_CLI=skills/task-list-initialization/scripts/task_list_cli.py
@@ -450,18 +475,20 @@ python3 "$SKILL_CLI" standardize \
 python3 -m unittest discover -s tests/scripts -p 'test_*.py'
 ```
 
-290 个测试，全部通过。
+350 个测试，全部通过。
 
 ### 项目结构
 
 ```
 skills-task-list-initialization/
-├── VERSION                                   # V0.3.8
+├── VERSION                                   # V0.3.9
 ├── skills/task-list-initialization/
 │   ├── SKILL.md                              # 技能定义
 │   ├── evals/
 │   │   ├── evals.json                        # 任务执行评测用例（fixtures 已挂接）
 │   │   ├── trigger-evals.json                # 触发/行为评测矩阵（14 例）
+│   │   ├── run-evals.py                      # 无头真实 agent 评测运行器
+│   │   ├── aggregate-benchmark.py            # 运行遥测汇总（benchmark.json）
 │   │   └── fixtures/                         # 评测前置夹具
 │   ├── references/
 │   │   ├── task-list-standard.md             # 推荐字段 / schema 标准
@@ -474,7 +501,7 @@ skills-task-list-initialization/
 ├── tests/
 │   └── scripts/                               # 测试套件（全部 test_*.py 与公共助手）
 │       ├── helpers.py                         # 测试公共助手
-│       └── test_*.py                          # 单元测试（290）
+│       └── test_*.py                          # 单元测试（350）
 ├── LICENSE                                   # MIT
 └── README.md
 ```
@@ -484,6 +511,27 @@ skills-task-list-initialization/
 [MIT](LICENSE) © 2026 fenix-wangminle。
 
 ### 更新日志
+
+#### V0.3.9
+
+- BUG-111：摘要只剩表头和分隔行时仍执行缺失分类检查；已有记录的台账删除全部摘要数据行后，`check` 返回 1 并指出缺少的分类。没有可选摘要章节的台账保持通过。新增 4 项 CLI 回归覆盖中英完整模板、合法统计口径、无摘要对照和 `summary --write` 恢复——**350** 个单元测试。
+- DEV-030：新增 `fleet` 批量巡检子命令——指定根目录即递归发现其下所有 `task-list.md`，逐文件完整诊断（`check` + `standardize` 诊断 + 维护规则状态，各按文件自身语言），输出逐文件表格与汇总报告；`--exclude` glob 排除备份/评测/运行时副本（默认已排除 `.git`/`node_modules`/`.stversions`），`--apply-safe-fixes` 持写锁就地修复并复检，`--format json` / `--report` 供自动化消费；退出码（0 全过或空树 / 1 有文件失败、单文件诊断出错或扫描不完整 / 2 根目录不存在或报告写不进去）适配 cron 与 CI 健康门禁——替代手工拼接的多项目巡检脚本
+- DEV-031：写路径跨进程锁——所有写命令（`add`/`update`/`archive`/`summary --write`/`standardize` 修复/`init`/`fleet --apply-safe-fixes`）持 `task-list.md.lock` sidecar 排他 advisory 锁（POSIX `flock`、Windows `msvcrt`；10 秒超时输出本地化 `lock_timeout`，进程死亡自动释放，dry-run 与只读命令不持锁），消除两个会话并发写时读-改-写竞态产生的重复 ID
+- DEV-033：自定义分区表格约束——标准分区之外的表格若首列是严格任务 ID（`^[A-Z]+-\d{3,}$`）但无标准记录表头，`check` 直接报错；agent 不能再即兴发明以 P2/P3 当状态列的记录表（源自评审日志小节的实战事故）
+- DEV-032：时间倒挂比较改为精度感知——双方带时间按分钟比；任一侧仅日期（单→双日期迁移遗留）只比日历日，同日不再永久告警，剩余的倒挂警告都是真问题（BUG-094 修复后显式 date-only 写入按日精度原样落盘，工具自身不再制造假倒挂）
+- BUG-094：显式 date-only 的 `--found-time` / `--completed-time` / `--date` 原样落盘（`YYYY-MM-DD`，不再补 `00:00`）——此前补齐的 `00:00` 会制造永久的同日"倒挂"，check 一直报警，还会经由写后回滚阻断后续仅追加备注的 update
+- BUG-095/BUG-096：`fleet --apply-safe-fixes` 逐文件隔离失败（锁超时或 I/O 错误 → 该文件记 status=error，巡检继续，退出码仍非零），不再以 traceback 中止整轮并丢弃已扫结果；移除 Python 3.9+ 的 `Path.is_relative_to` 调用，恢复 3.8+ 兼容承诺（含 AST 级回归守卫）
+- BUG-097/BUG-100：自定义分区门禁改为校验「受支持的记录 schema」（任一注册分区的双日期/单日期表头形状）而非「有表头即可」——形如 `| ID | 问题 | 结论 |` 的伪表头不能再让 ID 行绕过逐行校验混入按前缀摘要；走私行仍全局登记身份与 `[[引用]]`，跨表重复 ID 会被报出、仅存在于走私表的 ID 引用不算悬空、两位数字 ID 形态也会被标记
+- BUG-098/BUG-099/BUG-101：fleet 输出与锁加固——空树 `--format json` 仍输出可解析 JSON；`--report` 报告列入用户 `--exclude` 且转义路径中的 `|`；不可读目录显式报 `scan_errors` 并以退出码 1 失败，不再伪装全通过；`--report` 路径不可写时以本地化消息退出码 2；对不存在的目标加锁不再创建父目录或残留 sidecar；锁创建失败输出指名台账路径的本地化消息；锁超时文案显示台账路径而非内部 `.lock` 路径；本仓忽略 `task-list.md.lock`（消费端建议同样忽略 `*.md.lock`）
+- 测试：新增 12 个回归覆盖 BUG-094～101 整批（日精度落盘 + 写后 check + 后续 update、逐文件锁隔离、缺失目标副作用、只读目录锁错误、伪表头走私、走私身份/引用语义、空树 JSON、报告 exclude/不可写路径/竖线转义、不可读目录披露、3.9+ API AST 守卫），另含 msvcrt 分支 mock 与 fleet 英文 locale 矩阵——**324** 个单元测试
+- BUG-102/BUG-103/BUG-104：fleet 边界补齐——单个项目的维护文件（`CLAUDE.md` 及同类旁路文件）编码异常记为 status=error 并继续巡检，JSON 仍保留其他项目结果；空目录在默认文本模式下也会写入并覆盖 `--report`；报告路径改走 `escape_cell`，目录名同时含反斜杠与竖线时不再拆列——**327** 个单元测试
+- BUG-105：`atomic_write` 改为逐字写出 `\n`，不再按平台翻译行尾——Windows 端安装曾把 CRLF 写进 bash hook 脚本（`fi\r` 不是 `fi`，Stop hook 解析即失败），且安装器幂等比较走 `read_text()`（通用换行读取把 CRLF 归一化成 LF），损坏的脚本被误判为「与模板一致」而永不修复。写入现为字节忠实的 LF（与 BUG-090 回滚孪生一致），比较改为原始字节，重跑 `install-maintenance --with-hook` 即自愈并明确提示「已重写」——**329** 个单元测试
+- BUG-106：`fleet --report` 与 `standardize --report` 在报告路径与任一输入台账解析为同一文件时直接拒绝（exit 2、不写任何内容、台账字节不变）——比较前先经 `resolve()` 归并相对路径/`..`/符号链接别名；`fleet` 的检查先于巡检执行，因此报告冲突同样抑制 `--apply-safe-fixes` 的修复，而不是去修复一个即将被报告覆盖的文件
+- BUG-107：`archive` 从首读归档到提交全程持有归档文件自身的第二把锁（锁序恒为主表→归档；唯一使用嵌套锁的命令）——过去两个不同主台账并发归档到同一共享归档时，双方都在任一方写入前完成读取，后提交者会静默丢弃对方的记录；查重现移入临界区基于新数据执行，互斥交叉归档退化为干净的 `lock_timeout`，绝不丢数据——由屏障同步的双进程回归钉死，并已在未修复代码上验证失败
+- BUG-108：`check` 对记录表头下 GFM 分隔行缺失或列数与表头不符直接判失败（CommonMark 要求分隔行紧邻表头且等宽，否则整表在预览中渲染为纯文本）——两种情况均报行号，围栏内示例表永不计入；`add` 拒绝向坏分区追加（点名行号），同文件其他分区仍可写，缺陷以存量形式披露
+- BUG-109：摘要表对分类标题中的 `|` 转义（`研究 \| 调试`），合法的自定义标题（如 `## 研究 | 调试`）不再在 5 列摘要表里产生 6 列行与错位数字；`check` 现在标记历史宽行损坏的摘要行与缺失分类行（先形态后数字；口径不明/过期时保守处理）
+- BUG-110：列数异常行仍登记其严格 ID——藏在超宽行里的重复 ID 会被报出，指向仅存在于超宽行的 ID 的 `[[引用]]` 不再误报悬空——同时此类行仍排除在完成率统计之外
+- 测试：`tests/scripts/test_cli_bugfix_106_110.py` 新增 17 项回归（报告覆盖拒绝 + 点号别名 + 修复中止 + 独立路径对照、standardize 报告冲突、`commit_all` 汇合屏障的双进程并发归档、分隔行缺失/列宽/空行/围栏豁免/add 拒绝/健康分区可写、管道标题写入 + 幂等 + 历史宽行 + 缺分类、超宽行重复 + 不误报悬空）——**346** 个单元测试
 
 #### V0.3.8
 

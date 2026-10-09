@@ -18,16 +18,126 @@ disk full, OS error) the file is left truncated or empty. This module replaces a
 
 from __future__ import annotations
 
+import contextlib
 import os
 import stat
 import tempfile
+import time
 from pathlib import Path
 
-__all__ = ["atomic_write", "backup", "commit_all"]
+__all__ = [
+    "atomic_write",
+    "backup",
+    "commit_all",
+    "file_lock",
+    "LockCreateError",
+    "LockTimeout",
+]
+
+
+class LockTimeout(TimeoutError):
+    """Raised when the task-list write lock is not acquired within the timeout.
+
+    Carries the lock path and the waited seconds so the CLI layer can render a
+    localized message without re-deriving them.
+    """
+
+    def __init__(self, lock_path: Path, waited: float):
+        super().__init__(f"timed out acquiring {lock_path}")
+        self.lock_path = lock_path
+        self.waited = waited
+
+
+class LockCreateError(OSError):
+    """Raised when the lock sidecar cannot be created or opened (BUG-099).
+
+    Wraps the underlying OSError raised by the sidecar's mkdir/open (read-only
+    directory, path component is a file, ...) so the CLI can render a localized
+    message naming the LEDGER path instead of leaking a raw traceback. It is a
+    distinct type on purpose: a plain ``except OSError`` around the whole lock
+    scope would also swallow ordinary I/O errors from the guarded command itself.
+    """
+
+    def __init__(self, lock_path: Path, target: Path, reason: OSError):
+        super().__init__(f"cannot create lock {lock_path}: {reason}")
+        self.lock_path = lock_path
+        self.target = target
+        self.reason = reason
+
+
+def _lock_fd_once(fd: int) -> bool:
+    """One non-blocking acquire attempt. True on success, False when held elsewhere."""
+    if os.name == "nt":
+        import msvcrt
+
+        try:
+            # Lock one byte at the start of the file; LK_NBLCK returns immediately.
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+    import fcntl
+
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def _unlock_fd(fd: int) -> None:
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+
+@contextlib.contextmanager
+def file_lock(path: Path, timeout: float = 10.0):
+    """Cross-process advisory lock guarding one task-list's read-modify-write cycle.
+
+    Two sessions running ``add`` on the same file otherwise race: both read, both
+    compute the same next ID, both write — duplicate IDs that check only finds after
+    the fact. All mutating commands hold this lock from first read to final write, so
+    the second session waits (or times out) instead of interleaving.
+
+    The lock lives in a sidecar ``<name>.lock`` file and is an OS-level lock
+    (flock / msvcrt), so it is released automatically if the holder crashes — no
+    stale-lock cleanup. The sidecar file itself is never deleted (harmless, and
+    deleting it would reintroduce a race). Raises LockTimeout after *timeout* seconds.
+    """
+    lock_path = path.with_name(path.name + ".lock")
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError as exc:
+        raise LockCreateError(lock_path, path, exc) from exc
+    try:
+        deadline = time.monotonic() + timeout
+        while True:
+            if _lock_fd_once(fd):
+                break
+            if time.monotonic() >= deadline:
+                raise LockTimeout(lock_path, timeout)
+            time.sleep(0.1)
+        try:
+            yield
+        finally:
+            _unlock_fd(fd)
+    finally:
+        os.close(fd)
+
 
 
 def atomic_write(path: Path, text: str) -> None:
-    """Atomically write *text* to *path* (UTF-8).
+    """Atomically write *text* to *path* (UTF-8, LF line endings, byte-faithful).
 
     Writes to a temporary file in the same directory, flushes + fsyncs it, then
     ``os.replace``s it onto the target. Because the temp lives in the same directory,
@@ -43,9 +153,16 @@ def atomic_write(path: Path, text: str) -> None:
     # rewrite into a 0600 chmod (BUG-068). New files use 0o644.
     existing_mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
     # delete=False: we rename it ourselves via os.replace; unlink on failure.
+    # newline="": write \n verbatim instead of translating to os.linesep. The
+    # default turned every Windows install into CRLF — fine for Markdown, fatal
+    # for the bash hook script, where "fi\r" is not "fi" and the Stop hook died
+    # at parse time (BUG-105). Deterministic LF also agrees with the byte-faithful
+    # rollback twin _atomic_write_bytes (BUG-090), so commit/rollback round-trips
+    # stay stable across OSes.
     tmp = tempfile.NamedTemporaryFile(
         mode="w",
         encoding="utf-8",
+        newline="",
         dir=str(path.parent),
         prefix=f".{path.name}.",
         suffix=".tmp",

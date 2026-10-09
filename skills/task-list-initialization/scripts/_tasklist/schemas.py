@@ -147,6 +147,21 @@ def is_unmappable_legacy_header(cells: list[str], section: Section, locale: Loca
         return date_name
     return None
 
+
+def is_supported_record_header(headers: list[str], locale: Locale) -> bool:
+    """True when *headers* matches ANY registered section's record shape (dual or single).
+
+    A custom (non-registry) section carrying this full shape is a legitimate record
+    table (BUG-076 compat: summary counts it, so per-row validation must run too).
+    Anything else — no header at all, or a pseudo header like ``| ID | 问题 | 结论 |``
+    whose first cell merely says ID — is NOT a record table; its ID-shaped rows
+    smuggle records past per-row validation (BUG-097).
+    """
+    for section in locale.all_sections():
+        if resolve_header(headers, section, locale).kind is not HeaderKind.UNKNOWN:
+            return True
+    return False
+
 def detect_schema(text: str, locale: Locale) -> str:
     """Detect whether a file uses the dual-date or single-date schema.
 
@@ -421,6 +436,21 @@ def normalize_time(value: str | None, default: str, locale: Locale | None = None
         raise SystemExit(T[lang]["bad_time"].format(value))
     return value
 
+def normalize_time_keep_day(value: str | None, default: str, locale: Locale | None = None) -> str:
+    """normalize_time, but an explicit date-only value keeps day precision on write (BUG-094).
+
+    Validation is identical (shape + real-calendar check, both via normalize_time); only
+    the landed value differs: a value the user wrote as ``YYYY-MM-DD`` lands verbatim
+    instead of being padded to ``00:00``, so the precision-aware gate, the written cell
+    and the reader-side comparison all see the same granularity. Padding was what turned
+    a legal same-day date-only Done into a permanent "00:00 < found" inversion that also
+    blocked later note-only updates (the write-path rollback treated it as a NEW issue).
+    """
+    if value and re.match(r"^\d{4}-\d{2}-\d{2}$", value.strip()):
+        normalize_time(value, default, locale)
+        return value.strip()
+    return normalize_time(value, default, locale)
+
 def default_completed_time(status: str, now: str, locale: Locale) -> str:
     if status in locale.completed_statuses:
         return now
@@ -478,10 +508,10 @@ def single_date_cell(
     if semantic == "completed":
         raw = args.date or args.completed_time or ""
         if status in locale.completed_statuses:
-            return normalize_time(raw or now, now, locale)
+            return normalize_time_keep_day(raw or now, now, locale)
         return "-"
     raw = found_raw or args.date or args.completed_time or ""
-    return normalize_time(raw or now, now, locale)
+    return normalize_time_keep_day(raw or now, now, locale)
 
 def local_minute_now() -> str:
     return datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")
@@ -510,10 +540,39 @@ def _parse_task_time(value: str) -> datetime | None:
             return None
     return None
 
+def _parse_task_time_precise(value: str) -> tuple[datetime, bool] | None:
+    """Parse like _parse_task_time, also reporting whether the value has minute precision.
+
+    Returns (parsed, has_time): has_time is False for date-only `YYYY-MM-DD` values,
+    whose implied 00:00 is a precision artifact, not a real midnight timestamp.
+    """
+    value = value.strip()
+    if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", value):
+        parsed = _parse_task_time(value)
+        return (parsed, True) if parsed is not None else None
+    parsed = _parse_task_time(value)
+    return (parsed, False) if parsed is not None else None
+
+def times_reversed(found: str, completed: str) -> bool:
+    """True only when completed < found is proven at the available precision.
+
+    A date-only value carries day precision, so comparing its implied 00:00 against a
+    minute-precision counterpart manufactures inversions out of thin air (the legacy
+    single→dual migration pain: every date-only Done on the same day as a timed Found
+    warned forever and needed git archaeology to clear). Mixed-precision pairs compare
+    at day granularity: only a strictly earlier calendar day is a real inversion.
+    """
+    pf = _parse_task_time_precise(found)
+    pc = _parse_task_time_precise(completed)
+    if pf is None or pc is None:
+        return False
+    (ft, found_has_time), (ct, completed_has_time) = pf, pc
+    if found_has_time and completed_has_time:
+        return ct < ft
+    return ct.date() < ft.date()
+
 def _reject_reversed_times(found: str, completed: str, locale: Locale) -> None:
-    ft = _parse_task_time(found)
-    ct = _parse_task_time(completed)
-    if ft is not None and ct is not None and ct < ft:
+    if times_reversed(found, completed):
         raise SystemExit(T[locale.name]["time_reverse_write"].format(found, completed))
 
 def _is_valid_time(value: str) -> bool:

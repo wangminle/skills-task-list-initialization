@@ -289,6 +289,33 @@ class CliMaintenanceTest(CliTestCase):
             self.assertIn("已安装（跳过）", again.stdout)
             self.assertNotIn("已升级", again.stdout)
 
+    def test_install_maintenance_repairs_crlf_hook_script(self):
+        # BUG-105: a hook script written on (or synced through) Windows carries CRLF
+        # line endings — bash cannot parse "fi\r" and the Stop hook dies with
+        # "syntax error: unexpected end of file". The old idempotency check compared
+        # via read_text(), which normalizes CRLF to \n, so the corrupted script
+        # compared EQUAL to the template: re-running the installer printed "skip"
+        # and never repaired it. The comparison is now byte-exact and atomic_write
+        # emits LF verbatim, so --with-hook is self-healing.
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            self.run_cli("init", "--output", str(target))
+            with _bash_visible_on_path():
+                self.run_cli("install-maintenance", "--file", str(target), "--with-hook")
+            script_path = Path(tmp) / ".claude" / "hooks" / "tasklist_sync_reminder.sh"
+            healthy = script_path.read_bytes()
+            self.assertNotIn(b"\r", healthy)
+            # Corrupt the copy the way a Windows-side write/sync would: CRLF endings.
+            script_path.write_bytes(healthy.replace(b"\n", b"\r\n"))
+            with _bash_visible_on_path():
+                result = self.run_cli(
+                    "install-maintenance", "--file", str(target), "--with-hook",
+                    check=False,
+                )
+            self.assertEqual(result.returncode, 0)
+            self.assertIn("已重写", result.stdout)
+            self.assertEqual(script_path.read_bytes(), healthy)
+
     def test_install_maintenance_with_hook_refuses_without_bash(self):
         # BUG-093: on bash-less machines (plain Windows) the old installer wrote a
         # `bash ...` hook "successfully" that then failed on every Stop event. The

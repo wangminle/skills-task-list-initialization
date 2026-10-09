@@ -16,12 +16,12 @@ from .locales import (
     TASKLIST_HOOK_MARKER,
     Locale,
 )
-from .repository import atomic_write, commit_all
+from .repository import LockCreateError, LockTimeout, atomic_write, commit_all, file_lock
 from .maintenance import HOOK_SCRIPT_EN, HOOK_SCRIPT_ZH, MAINTENANCE_RULE_EN, MAINTENANCE_RULE_ZH, TASKLIST_HOOK_COMMAND, _load_settings_for_hooks, _upgrade_tasklist_hook_commands, detect_maintenance_rule
 from .migration import migrate_legacy_schema
-from .parser import _collect_wiki_refs, _fenced_code_mask, collect_records, find_record_line, is_section_heading_line, parse_sections, section_headers_by_title
+from .parser import _collect_wiki_refs, _fenced_code_mask, collect_records, find_header_separator_defects, find_record_line, is_section_heading_line, parse_sections, section_headers_by_title
 from .renderer import add_missing_sections, append_notes, build_row_for_headers, build_template, collapse_intra_table_blank_lines, escape_unescaped_pipes, insert_row, replace_row_line, table_line
-from .schemas import _reject_reversed_times, cell_at_field, date_column_semantic, default_completed_time, detect_locale, detect_schema, find_section_by_title, get_locale, header_field_index, local_minute_now, matches_single_date_header, normalize_time, prefix_for_section, section_for_title, single_date_cell
+from .schemas import _reject_reversed_times, cell_at_field, date_column_semantic, default_completed_time, detect_locale, detect_schema, find_section_by_title, get_locale, header_field_index, local_minute_now, matches_single_date_header, normalize_time_keep_day, prefix_for_section, section_for_title, single_date_cell
 from .summary import (
     SummaryPolicy,
     has_summary_section,
@@ -259,6 +259,16 @@ def _append_one_entry(
     section = section_for_title(section_title, locale)
     if not section:
         raise SystemExit(T[lang]["section_not_found"].format(section_title))
+    # BUG-108: appending into a section whose record table has no valid GFM delimiter
+    # row (or a wrong-width one) keeps feeding a block that renders as plain text in
+    # preview. add must not deepen the damage — refuse like a missing header does;
+    # check names the offending line. Other sections stay writable (the post-write
+    # baseline check discloses the pre-existing defect instead of blocking).
+    for header_index, defect_title, _kind, _header_count, _sep_count in find_header_separator_defects(text):
+        if defect_title == section_title:
+            raise SystemExit(
+                T[lang]["add_separator_broken"].format(header_index + 1, section_title)
+            )
     prefix = prefix_for_section(section_title, locale)
     item_id = str(entry["id"]) if entry.get("id") else next_id(prefix, text, *extras)
     if entry.get("id"):
@@ -282,14 +292,21 @@ def _append_one_entry(
     validate_action_status(action, status, locale)
     date_val = str(entry["date"]) if entry.get("date") else None
     found_raw = str(entry["found_time"]) if entry.get("found_time") else date_val
-    found_time = normalize_time(found_raw, now, locale)
+    found_time = normalize_time_keep_day(found_raw, now, locale)
     completed_value = str(entry["completed_time"]) if entry.get("completed_time") else None
     if not completed_value and status in locale.completed_statuses:
         completed_value = date_val
-    completed_time = normalize_time(
+    completed_time = normalize_time_keep_day(
         completed_value, default_completed_time(status, now, locale), locale
     )
-    _reject_reversed_times(found_time, completed_time, locale)
+    # Precision-aware gate: judge RAW user input so a date-only value is compared at day
+    # granularity; normalize_time pads 00:00 into the cell, which would manufacture a
+    # same-day inversion (found 15:00 vs completed "… 00:00") out of precision loss.
+    _reject_reversed_times(
+        found_raw if found_raw else found_time,
+        completed_value if completed_value else completed_time,
+        locale,
+    )
     notes = str(entry.get("notes") or "-")
     ns = argparse.Namespace(
         date=date_val,
@@ -510,11 +527,11 @@ def command_update(args: argparse.Namespace) -> int:
     if args.found_time is not None:
         if "found_time" not in indices:
             raise SystemExit(T[lang]["field_not_applicable"].format("--found-time", title))
-        cells[indices["found_time"]] = normalize_time(args.found_time, args.found_time, locale)
+        cells[indices["found_time"]] = normalize_time_keep_day(args.found_time, args.found_time, locale)
     if args.completed_time is not None:
         if "completed_time" not in indices:
             raise SystemExit(T[lang]["field_not_applicable"].format("--completed-time", title))
-        new_completed = normalize_time(
+        new_completed = normalize_time_keep_day(
             args.completed_time, args.completed_time, locale
         )
         if args.status is not None:
@@ -576,8 +593,14 @@ def command_update(args: argparse.Namespace) -> int:
         cells[indices["completed_time"]] = "-"
 
     if "found_time" in indices and "completed_time" in indices:
+        # Same precision rule as add: raw CLI values keep their date-only granularity;
+        # only fall back to the (normalized) cells for fields not being changed.
         _reject_reversed_times(
-            cells[indices["found_time"]], cells[indices["completed_time"]], locale
+            args.found_time if args.found_time is not None else cells[indices["found_time"]],
+            args.completed_time
+            if args.completed_time is not None
+            else cells[indices["completed_time"]],
+            locale,
         )
 
     new_text = replace_row_line(original, line_index, cells)
@@ -752,7 +775,8 @@ def command_install_maintenance(args: argparse.Namespace) -> int:
     hook_script = project_root / ".claude" / "hooks" / "tasklist_sync_reminder.sh"
     status = detect_maintenance_rule(project_root)
     if status.get("hook_installed"):
-        # Idempotent path: still upgrade legacy relative commands / rewrite missing script.
+        # Idempotent path: still upgrade legacy relative commands / rewrite a missing
+        # or corrupted script.
         if args.dry_run:
             print(m["maint_hook_present"])
             return 0
@@ -761,7 +785,14 @@ def command_install_maintenance(args: argparse.Namespace) -> int:
         upgraded = _upgrade_tasklist_hook_commands(stop_list)
         script = HOOK_SCRIPT_ZH if lang == "zh" else HOOK_SCRIPT_EN
         desired = script.replace("CLAUDE.md", rule_file_name)
-        if (not hook_script.exists()) or hook_script.read_text(encoding="utf-8") != desired:
+        # Byte-exact comparison (BUG-105): read_text() normalizes CRLF to \n, so a
+        # script whose line endings a Windows-side write or sync had turned into
+        # CRLF compared EQUAL to the template — bash cannot parse "fi\r", yet
+        # re-running the installer printed "skip" and never repaired it. Compare
+        # raw bytes so --with-hook is self-healing.
+        on_disk = hook_script.read_bytes() if hook_script.exists() else None
+        repaired = on_disk != desired.encode("utf-8")
+        if repaired:
             plans.append((hook_script, desired))
             hook_script_needs_chmod = True
         if upgraded:
@@ -772,6 +803,8 @@ def command_install_maintenance(args: argparse.Namespace) -> int:
                 hook_script.chmod(hook_script.stat().st_mode | 0o111)
         if upgraded:
             print(m["maint_hook_upgraded"])
+        elif repaired:
+            print(m["maint_hook_repaired"])
         else:
             print(m["maint_hook_present"])
         return 0
@@ -983,6 +1016,15 @@ def command_standardize(args: argparse.Namespace) -> int:
     project_root = path.resolve().parent
     original_text = read_task_list(path)
     locale = get_locale(detect_locale(original_text))
+    if args.report and Path(args.report).resolve() == path.resolve():
+        # BUG-106 class: writing --report over the very ledger being analyzed destroys
+        # the records (and with a repair flag, overwrites the just-repaired file) while
+        # the command still reports success. Refuse before any write.
+        print(
+            T[locale.name]["report_is_input"].format(Path(args.report), path),
+            file=sys.stderr,
+        )
+        return 2
     working_text = original_text
     applied_fixes: list[str] = []
     migrate_warnings: list[str] = []
@@ -1128,27 +1170,52 @@ def command_archive(args: argparse.Namespace) -> int:
     # then committed as one transaction (REQ-13): if either write fails, both roll back
     # to their pre-archive bytes — records are never left half-moved (dropped from the
     # main file but missing from the archive).
-    if archive_path.exists():
-        existing = read_task_list(archive_path, lang=locale.name)
-        moved_ids = re.findall(r"^\|\s*([A-Z]+-\d+)\s*\|", archive_body, re.M)
-        existing_ids = set(re.findall(r"^\|\s*([A-Z]+-\d+)\s*\|", existing, re.M))
-        conflicts = sorted({i for i in moved_ids if i in existing_ids} | {
-            i for i, n in Counter(moved_ids).items() if n > 1
-        })
-        if conflicts:
-            raise SystemExit(
-                T[locale.name]["archive_dupe"].format(
-                    ", ".join(conflicts), archive_path.name
-                )
+    #
+    # BUG-107: the archive file is a SHARED write target. Two different main ledgers
+    # archiving into the same archive both read the same old snapshot, and the later
+    # commit erased the earlier one's rows — both commands reported success while
+    # records vanished from every copy. The main-file lock held by main() only
+    # serializes same-main runs, so hold the archive's own lock from the first read of
+    # the existing archive through commit/rollback; concurrent archives then merge
+    # serially and the duplicate-ID check inside the critical section sees fresh data.
+    # Lock order is always main → archive (archive is the only nested-lock command), so
+    # the one un-serializable interleave is two MUTUAL cross-archives (a→b while b→a);
+    # that pair degrades to a clean lock_timeout, never lost records.
+    try:
+        with file_lock(archive_path):
+            if archive_path.exists():
+                existing = read_task_list(archive_path, lang=locale.name)
+                moved_ids = re.findall(r"^\|\s*([A-Z]+-\d+)\s*\|", archive_body, re.M)
+                existing_ids = set(re.findall(r"^\|\s*([A-Z]+-\d+)\s*\|", existing, re.M))
+                conflicts = sorted({i for i in moved_ids if i in existing_ids} | {
+                    i for i, n in Counter(moved_ids).items() if n > 1
+                })
+                if conflicts:
+                    raise SystemExit(
+                        T[locale.name]["archive_dupe"].format(
+                            ", ".join(conflicts), archive_path.name
+                        )
+                    )
+                final_archive = merge_archive_body(existing, archive_body, locale)
+            else:
+                final_archive = archive_body
+
+            # Keep an existing 统计摘要 in step with the records left in the main file.
+            main_text, synced, _stale_summary = maybe_sync_summary(
+                main_text, locale, True, baseline=text
             )
-        final_archive = merge_archive_body(existing, archive_body, locale)
-    else:
-        final_archive = archive_body
 
-    # Keep an existing 统计摘要 in step with the records left in the main file.
-    main_text, synced, _stale_summary = maybe_sync_summary(main_text, locale, True, baseline=text)
-
-    commit_all([(archive_path, final_archive), (path, main_text)])
+            commit_all([(archive_path, final_archive), (path, main_text)])
+    except LockTimeout as exc:
+        # main()'s generic handler would name the MAIN file; the contention here is on
+        # the archive, so report the archive path (BUG-099 wording).
+        raise SystemExit(
+            T[locale.name]["lock_timeout"].format(archive_path, int(exc.waited))
+        )
+    except LockCreateError as exc:
+        raise SystemExit(
+            T[locale.name]["lock_create_failed"].format(exc.target, exc.reason)
+        )
     print(T[locale.name]["archive_moved"].format(moved, archive_path))
     if synced:
         print(T[locale.name]["summary_synced"])
@@ -1529,10 +1596,165 @@ def build_parser() -> argparse.ArgumentParser:
     )
     archive.add_argument("--dry-run", action="store_true", help="只打印主表内容到 stdout，归档内容到 stderr，不写文件")
     archive.set_defaults(func=command_archive)
+
+    fleet = sub.add_parser(
+        "fleet",
+        help="批量巡检：扫描节点目录下所有 task-list.md，逐个项目检查（可选安全修复）并汇总",
+    )
+    fleet.add_argument("--root", required=True, help="巡检根目录（其下所有含 task-list.md 的项目文件夹）")
+    fleet.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        help="排除 glob（可重复；如 'evals/workspace/runs' 只排除该相对子树；推荐用裸目录名如 'examples'，匹配任意层级的同名目录——注意 '*/examples' 不匹配根级 examples）；默认已排除 .git/node_modules/.stversions 等",
+    )
+    fleet.add_argument(
+        "--apply-safe-fixes",
+        action="store_true",
+        help="对每个文件执行与 standardize 相同的安全修复（补缺失空分区/删表内空行/转义未转义 |），修复后复检",
+    )
+    fleet.add_argument("--format", choices=["text", "json"], default="text", help="输出格式")
+    fleet.add_argument("--report", help="把巡检结果写成 Markdown 报告到指定路径")
+    fleet.add_argument(
+        "--lang",
+        choices=["zh", "en"],
+        default="zh",
+        help="巡检输出自身的语言（各文件的诊断按其自身语言）",
+    )
+    fleet.set_defaults(func=command_fleet)
     return parser
+
+def _report_input_clash(report_path: Path, ledger_paths: list[Path]) -> Path | None:
+    """First ledger that IS the report target (same file; aliases included).
+
+    resolve() collapses relative paths, ``..`` segments, and symlinks, so a report
+    path that merely LOOKS different from a scanned ledger still matches.
+    """
+    identity = report_path.resolve()
+    for candidate in ledger_paths:
+        if candidate.resolve() == identity:
+            return candidate
+    return None
+
+
+def command_fleet(args: argparse.Namespace) -> int:
+    from .fleet import find_task_lists, render_report, render_text, results_to_json, run_fleet
+
+    root = Path(args.root)
+    locale = get_locale(args.lang)
+    m = T[locale.name]
+    if not root.is_dir():
+        print(m["fleet_root_missing"].format(root), file=sys.stderr)
+        return 2
+    excludes = list(args.exclude or [])
+    # BUG-106: --report writing over one of the scanned ledgers destroys that
+    # project's records while the command still returns success. resolve() collapses
+    # relative paths and symlink aliases, so compare file identities, not strings.
+    # The guard runs BEFORE the sweep — with --apply-safe-fixes the sweep itself
+    # writes, and refusing up front keeps the ledger's bytes untouched — and again
+    # before the report write, against the files the sweep actually covered.
+    if args.report:
+        report_path = Path(args.report)
+        clash = _report_input_clash(report_path, find_task_lists(root, excludes))
+        if clash is not None:
+            print(m["report_is_input"].format(report_path, clash), file=sys.stderr)
+            return 2
+    scan_errors: list[str] = []
+    results = run_fleet(
+        root,
+        excludes,
+        apply_fixes=args.apply_safe_fixes,
+        locale_name=locale.name,
+        scan_errors=scan_errors,
+    )
+    # JSON output is a machine contract (BUG-098): an empty tree must still emit a
+    # parseable payload (total 0), never localized prose that breaks json.load.
+    # An empty text sweep used to return before --report (BUG-103), so cron kept
+    # reading the previous report. Stdout format must not decide whether the
+    # report file is written.
+    if args.format == "json":
+        print(results_to_json(results, root, excludes, scan_errors), end="")
+    elif not results and not scan_errors:
+        print(m["fleet_none"].format(root))
+    else:
+        print(render_text(results, root, excludes, locale, scan_errors), end="")
+    if args.report:
+        report_path = Path(args.report)
+        # Second BUG-106 guard: a ledger created between the pre-sweep walk and the
+        # report write still must not be clobbered by the report.
+        clash = _report_input_clash(report_path, [Path(entry["path"]) for entry in results])
+        if clash is not None:
+            print(m["report_is_input"].format(report_path, clash), file=sys.stderr)
+            return 2
+        try:
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(
+                report_path, render_report(results, root, locale, excludes, scan_errors)
+            )
+        except OSError as exc:
+            # e.g. the parent "directory" is a file, or the target is unwritable —
+            # fleet runs from cron/CI where a raw traceback helps nobody (BUG-098).
+            print(m["report_write_failed"].format(report_path, exc), file=sys.stderr)
+            return 2
+        print(T[locale.name]["report_written"].format(report_path), file=sys.stderr)
+    # Unreadable directories mean the sweep did NOT cover the tree: report failure
+    # instead of letting automation read "everything passed" out of a partial scan.
+    if scan_errors:
+        return 1
+    return 1 if any(entry.get("status") != "pass" for entry in results) else 0
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    target = _lock_target(args)
+    if target is None:
+        return args.func(args)
+    # Existence precedes locking (BUG-099): acquiring the lock would create the
+    # target's parent directory and leave a stray sidecar BEFORE the command itself
+    # reports file_not_found. init is the one command allowed to create its output.
+    if args.command != "init" and not target.exists():
+        print(T["zh"]["file_not_found"].format(target), file=sys.stderr)
+        return 1
+    try:
+        with file_lock(target):
+            return args.func(args)
+    except LockTimeout as exc:
+        # Locale detection needs the file; on contention we still try to read it so the
+        # message comes out in the ledger's own language, defaulting to Chinese. The
+        # message names the LEDGER path — the internal .lock sidecar is an
+        # implementation detail the user cannot act on (BUG-099).
+        lang = "zh"
+        try:
+            lang = detect_locale(target.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        print(T[lang]["lock_timeout"].format(target, int(exc.waited)), file=sys.stderr)
+        return 1
+    except LockCreateError as exc:
+        # mkdir/open of the sidecar failed (e.g. read-only directory); report the
+        # ledger path with a localized message instead of a raw traceback (BUG-099).
+        print(T["zh"]["lock_create_failed"].format(exc.target, exc.reason), file=sys.stderr)
+        return 1
+
+
+def _lock_target(args: argparse.Namespace) -> Path | None:
+    """Which file to lock for this invocation, or None for read-only/lock-free runs.
+
+    Every mutating command holds the target's lock from first read to final write so
+    parallel sessions serialize instead of interleaving read-modify-write (duplicate
+    IDs from concurrent add). Dry-runs never write, so they never lock.
+    """
+    command = getattr(args, "command", None)
+    if command in ("add", "update", "archive"):
+        return None if getattr(args, "dry_run", False) else Path(args.file)
+    if command == "summary":
+        if getattr(args, "write", False) and not getattr(args, "dry_run", False):
+            return Path(args.file)
+        return None
+    if command == "standardize":
+        fixing = (args.apply_safe_fixes or args.migrate_schema) and not args.dry_run
+        return Path(args.file) if fixing else None
+    if command == "init":
+        return None if args.dry_run else Path(args.output)
+    return None
 

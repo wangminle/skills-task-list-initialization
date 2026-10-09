@@ -86,6 +86,16 @@ def render_table(section: Section) -> str:
     sep = "| " + " | ".join(["---"] * len(section.columns)) + " |"
     return f"## {section.title}\n\n{head}\n{sep}\n"
 
+def render_section_blocks(sections: list[Section]) -> str:
+    """Render section tables as one block, separated by a blank line.
+
+    Single source of truth for the gap between consecutive section tables
+    (used by both build_template and add_missing_sections). A lone "\\n" join
+    glues the next ``## heading`` onto the previous ``| --- |`` separator row,
+    which GFM then swallows as a table row (issue #1: add_missing_sections).
+    """
+    return "\n\n".join(render_table(section).rstrip() for section in sections)
+
 def render_summary(sections: list[Section], locale: Locale) -> str:
     cols = list(locale.summary_columns)
     rows = ["| " + " | ".join(cols) + " |", "| " + " | ".join(["---"] * len(cols)) + " |"]
@@ -97,11 +107,10 @@ def render_summary(sections: list[Section], locale: Locale) -> str:
 def build_template(profile: str, with_summary: bool, locale: Locale) -> str:
     sections = profile_sections(profile, locale)
     header = "\n".join([locale.title, "", locale.intro, "", *locale.notes])
-    parts = [header.rstrip(), ""]
-    parts.extend(render_table(section).rstrip() + "\n" for section in sections)
+    blocks = [header.rstrip(), render_section_blocks(sections)]
     if with_summary:
-        parts.append(render_summary(sections, locale).rstrip())
-    return "\n".join(parts).rstrip() + "\n"
+        blocks.append(render_summary(sections, locale).rstrip())
+    return "\n\n".join(block for block in blocks if block) + "\n"
 
 def table_line(cells: list[str]) -> str:
     return "| " + " | ".join(escape_cell(cell) for cell in cells) + " |"
@@ -365,7 +374,7 @@ def add_missing_sections(text: str, profile: str, locale: Locale) -> tuple[str, 
     missing = missing_sections_for_profile(sections, profile, locale)
     if not missing:
         return text, []
-    additions = "\n".join(render_table(section).rstrip() for section in missing)
+    additions = render_section_blocks(missing)
     fixes = [T[locale.name]["add_section_fix"].format(section.title) for section in missing]
     lines = text.splitlines()
     summary_start = _summary_section_start(lines, locale)

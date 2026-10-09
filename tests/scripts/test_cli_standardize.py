@@ -385,3 +385,50 @@ class CliStandardizeTest(CliTestCase):
             )
             self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
             self.assertNotIn("未通过 check", clean.stderr)
+
+    def test_add_missing_sections_keep_blank_line_before_each_heading(self):
+        """issue #1: --apply-safe-fixes must leave a blank line before every added
+        "## heading"; a lone "\\n" join glued it onto the previous "| --- |"
+        separator row, which GFM then swallowed as a table row."""
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务清单\n\n## 功能开发\n\n"
+                "| ID | 任务 | 状态 | 发现时间 | 完成时间 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- |\n"
+                "| T1 | 示例任务 | 进行中 | 2026-09-01 | - | - |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli(
+                "standardize", "--file", str(target), "--apply-safe-fixes", "--dry-run"
+            )
+            self.assertIn("## 调整事项", result.stdout)
+            lines = result.stdout.splitlines()
+            for index, line in enumerate(lines):
+                if line.startswith("## "):
+                    self.assertTrue(
+                        index > 0 and lines[index - 1] == "",
+                        f"heading {line!r} is not preceded by a blank line:\n{result.stdout}",
+                    )
+
+    def test_recommendation_bullets_are_not_doubled(self):
+        """issue #2: locale recommendation strings that already start with "- "
+        (rec_section_order / rec_single_date_schema / rec_dup_id_mapping) must not
+        be prefixed a second time by the report bullet renderer."""
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "task-list.md"
+            target.write_text(
+                "# 任务跟踪列表\n\n"
+                "## 规划\n\n"
+                "| ID | 动作 | 事项 | 发现时间 | 完成时间 | 状态 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- | --- |\n"
+                "| PLA-001 | 规划 | 规划事项 | 2026-09-01 | - | 进行中 | - |\n\n"
+                "## 功能开发\n\n"
+                "| ID | 任务 | 状态 | 发现时间 | 完成时间 | 备注 |\n"
+                "| --- | --- | --- | --- | --- | --- |\n"
+                "| T1 | 示例任务 | 进行中 | 2026-09-01 | - | - |\n",
+                encoding="utf-8",
+            )
+            result = self.run_cli("standardize", "--file", str(target))
+            self.assertIn("- 章节顺序与模板不一致", result.stdout)
+            self.assertNotIn("- - ", result.stdout)

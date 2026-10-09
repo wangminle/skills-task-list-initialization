@@ -11,9 +11,9 @@ from .locales import (
     WIKI_ID_REF_RE,
 )
 from .maintenance import detect_maintenance_rule, render_maintenance_lines
-from .parser import _fenced_code_mask, _has_unclosed_backticks, _heading_title, _is_separator_row, _is_table_line, _looks_like_id, _looks_like_separator_attempt, _text_outside_backticks, collect_records, parse_sections, section_headers_by_title, split_cells
+from .parser import _fenced_code_mask, _has_unclosed_backticks, _heading_title, _is_separator_row, _is_table_line, _looks_like_id, _looks_like_separator_attempt, _text_outside_backticks, collect_records, find_header_separator_defects, parse_sections, section_headers_by_title, split_cells
 from .renderer import DANGEROUS_HTML_TAG_RE, _intra_table_blank_gaps, find_intra_table_blank_candidates, find_pipe_escape_candidates
-from .schemas import _is_valid_time, _parse_task_time, _single_date_slot_name, cell_at_field, detect_schema, expected_sections, header_field_index, infer_profile, local_minute_now, missing_sections_for_profile, profile_rank, section_for_title, suggest_status, target_profile, time_column_indices, to_single_date_columns
+from .schemas import _is_valid_time, _single_date_slot_name, cell_at_field, detect_schema, expected_sections, header_field_index, infer_profile, is_supported_record_header, local_minute_now, missing_sections_for_profile, profile_rank, section_for_title, suggest_status, target_profile, time_column_indices, times_reversed, to_single_date_columns
 from .summary import (
     SummaryPolicy,
     _ID_PREFIX_RE,
@@ -60,6 +60,17 @@ def preview_safety_issues(text: str, locale: Locale) -> list[str]:
                 tag = (tag_match.group(1) if tag_match else html_match.group(0)).lower()
                 issues.append(m["raw_html"].format(index + 1, tag))
                 break
+    # BUG-108: a record-table header (| ID | … |) needs a GFM delimiter row of the same
+    # width IMMEDIATELY below it. parse_sections accepts the header without one, so a
+    # separator-less or wrong-width header still "passed" check while preview rendered
+    # the whole block as plain text.
+    for header_index, _title, kind, header_count, sep_count in find_header_separator_defects(text):
+        if kind == "missing":
+            issues.append(m["missing_separator"].format(header_index + 1, header_count))
+        else:
+            issues.append(
+                m["separator_width"].format(header_index + 2, sep_count, header_count)
+            )
     return issues
 
 def check_text(text: str, locale: Locale, schema: str = "dual") -> list[str]:
@@ -114,8 +125,34 @@ def check_text(text: str, locale: Locale, schema: str = "dual") -> list[str]:
                     issues.append(m["header_mismatch"].format(title))
             elif headers != expected_cols:
                 issues.append(m["header_mismatch"].format(title))
+        # Per-row validation runs only under a SUPPORTED record schema: this registry
+        # section's own header, or a custom section whose header matches a registered
+        # record shape (BUG-076 compat — custom record sections are legal). A pseudo
+        # header whose first cell merely says "ID" (| ID | 问题 | 结论 |) is NOT
+        # supported, so its ID-shaped rows cannot bypass per-row validation (BUG-097).
+        supported = bool(expected and headers) or is_supported_record_header(headers, locale)
         for line_no, cells in info.get("rows", []):
-            if not headers:
+            if not supported:
+                # Non-record table (custom log/summary section, or a headerless/pseudo
+                # header table). Smuggled record rows are flagged, but their identity
+                # and references still register GLOBALLY (BUG-100): duplicate-ID
+                # detection must catch a repeat across standard + smuggled tables, and
+                # a [[ref]] to an ID that only exists in the smuggled table must not
+                # be reported as dangling.
+                if cells and re.match(r"^[A-Z]+-\d{3,}$", cells[0]):
+                    issues.append(
+                        m["custom_section_record"].format(line_no + 1, cells[0], title)
+                    )
+                    id_locations[cells[0]].append(line_no + 1)
+                    known_ids.add(cells[0])
+                elif cells and _looks_like_id(cells[0]):
+                    # Same malformed-ID surfacing as supported tables (bug-001 / BUG-01
+                    # shapes), which used to fall through silently here (BUG-100).
+                    issues.append(m["bad_id_line"].format(line_no + 1, cells[0]))
+                if cells:
+                    for cell in cells:
+                        for match in WIKI_ID_REF_RE.finditer(cell):
+                            wiki_refs.append((line_no + 1, match.group(1)))
                 continue
             if len(cells) != len(headers):
                 issues.append(m["col_mismatch"].format(line_no + 1, len(headers), len(cells)))
@@ -123,6 +160,15 @@ def check_text(text: str, locale: Locale, schema: str = "dual") -> list[str]:
                 for cell in cells:
                     for match in WIKI_ID_REF_RE.finditer(cell):
                         wiki_refs.append((line_no + 1, match.group(1)))
+                # BUG-110: register the row's strict ID as well. Width-anomalous rows
+                # used to skip ID registration entirely, so a duplicate ID hidden in an
+                # overwide row was never reported while a legit [[ref]] to it was
+                # falsely dangling. Identity detection covers the whole table; per-field
+                # semantics stay off the broken row (summary REQ-06 still excludes it
+                # from statistics).
+                if cells and re.match(r"^[A-Z]+-\d{3,}$", cells[0]):
+                    id_locations[cells[0]].append(line_no + 1)
+                    known_ids.add(cells[0])
                 continue
             if cells and re.match(r"^[A-Z]+-\d{3,}$", cells[0]):
                 id_locations[cells[0]].append(line_no + 1)
@@ -230,29 +276,57 @@ def summary_drift_issues(text: str, locale: Locale) -> list[str]:
 
     Also checks internal consistency: done + pending must equal total for each row, and
     the written completion rate must match a recomputation within rounding tolerance.
+    Shape comes first (BUG-109): rows with the wrong cell count and categories missing
+    from the written table are reported instead of silently skipped.
     """
     if not has_summary_section(text, locale):
         return []
+    m = T[locale.name]
+    issues: list[str] = []
+    # BUG-109: shape first, numbers second. A written summary row whose cell count is
+    # not the summary table's 5 columns renders misaligned in preview (GFM drops the
+    # excess cells) — old writers emitted exactly this by not escaping a `|` inside a
+    # custom section title — and its shifted columns parse as the wrong fields, so
+    # every number comparison below would compare garbage. parse_sections rows include
+    # the summary header row itself; it carries exactly len(summary_columns) cells and
+    # never trips this check.
+    expected_cols = len(locale.summary_columns)
+    summary_info = parse_sections(text).get(locale.summary_section) or {}
+    for line_no, cells in summary_info.get("rows", []):
+        if len(cells) != expected_cols:
+            issues.append(m["summary_row_width"].format(line_no + 1, len(cells), expected_cols))
     written = parse_summary_fields(text, locale)
-    if not written:
-        return []
+    # BUG-111: an empty parsed summary still needs the missing-category check
+    # below. Only an absent summary section is exempt (the guard above).
     # BUG-069: judge drift against the caliber the written table actually matches —
     # a summary produced by `summary --write --policy by-prefix` is legitimate, so
     # comparing it against by-section numbers would flag the tool's own output.
     actual_rows = compute_summary_rows(text, locale)
-    if written_summary_caliber(text, locale) is SummaryPolicy.BY_PREFIX:
+    caliber = written_summary_caliber(text, locale)
+    if caliber is SummaryPolicy.BY_PREFIX:
         actual_rows = compute_summary_rows_by_prefix(text, locale)
     actual_map = {title: (total, done, pending) for title, total, done, pending in actual_rows}
+    # BUG-109: a category that exists in the ledger but is absent from the written
+    # summary used to be silently skipped, so a summary under-reporting whole sections
+    # still passed check. When the written table matches neither caliber (stale or
+    # ambiguous), flag only categories BOTH calibers would list — by-prefix legitimately
+    # omits custom sections whose records all folded into prefix categories
+    # (CHK-102 ③), and prefix rows are a subset of section rows.
+    missing_rows = actual_rows
+    if caliber is None:
+        prefix_titles = {title for title, *_ in compute_summary_rows_by_prefix(text, locale)}
+        missing_rows = [row for row in actual_rows if row[0] in prefix_titles]
+    for title, *_ in missing_rows:
+        if title not in written:
+            issues.append(m["summary_missing_category"].format(title))
     actual_total = sum(t for t, _, _ in actual_map.values())
     actual_done = sum(d for _, d, _ in actual_map.values())
     actual_pending = sum(p for _, _, p in actual_map.values())
-    m = T[locale.name]
     # Tolerance for completion-rate comparison. The rate column is rendered at 1-decimal
     # precision, so a recomputed raw value (e.g. 99.63) rounds to 99.6; allow ±0.15 to
     # absorb that without false positives, while still catching hard errors like a
     # stale "100%" that should be 99.6.
     RATE_TOLERANCE = 0.15
-    issues: list[str] = []
     for title, (total, done, pending) in actual_map.items():
         if title not in written:
             continue
@@ -356,14 +430,14 @@ def record_quality_warnings(
             completed_without_time += 1
         if status in locale.pending_statuses and completed_time != "-":
             active_without_completed_dash += 1
-        # Detect completed time earlier than found time (datetime or date-only, BUG-067)
+        # Detect completed time earlier than found time — precision-aware: a date-only
+        # value only proves an inversion when its calendar day is strictly earlier
+        # (BUG-067's naive datetime compare manufactured warnings from precision loss).
         if (
             completed_time and completed_time != "-"
             and found_time and found_time != "-"
         ):
-            ft = _parse_task_time(found_time)
-            ct = _parse_task_time(completed_time)
-            if ft is not None and ct is not None and ct < ft:
+            if times_reversed(found_time, completed_time):
                 time_reverse_count += 1
         # Collect IDs per section for sequence check
         if cells and re.match(r"^[A-Z]+-\d{3,}$", cells[0]):
@@ -422,9 +496,7 @@ def time_reversal_issues(
         found_time = cell_at_field(cells, headers, "found_time", locale, fallback=-4)
         if not (completed_time and completed_time != "-" and found_time and found_time != "-"):
             continue
-        ft = _parse_task_time(found_time)
-        ct = _parse_task_time(completed_time)
-        if ft is not None and ct is not None and ct < ft:
+        if times_reversed(found_time, completed_time):
             issues.append(
                 m["time_reverse_existing"].format(line_no, cells[0], found_time, completed_time)
             )
@@ -578,7 +650,11 @@ def render_markdown_report(
         values = list(items or [])
         if not values:
             return f"- {m[empty_key]}"
-        return "\n".join(f"- {item}" for item in values)
+        # Some locale strings ship their own "- " marker (maintenance recommendations are
+        # rendered verbatim elsewhere); don't prepend a second one (issue #2: rec_section_order).
+        return "\n".join(
+            item if item.startswith("- ") else f"- {item}" for item in values
+        )
 
     return "\n".join(
         [
@@ -636,6 +712,17 @@ _ISSUE_FRAGMENTS = (
     ("unclosed", "unclosed_backtick"),
     ("被空行切断", "intra_table_blank"),
     ("blank line", "intra_table_blank"),
+    # New separator/summary-shape fragments precede their generic siblings:
+    # _code_for_message is first-match-wins, and the zh fragment 摘要表 / 表格分隔行
+    # would otherwise swallow the more specific messages below.
+    ("缺少紧邻的分隔行", "missing_separator"),
+    ("no adjacent delimiter row", "missing_separator"),
+    ("列与表头", "separator_width"),
+    ("but the header has", "separator_width"),
+    ("摘要表第", "summary_row_width"),
+    ("Summary row at line", "summary_row_width"),
+    ("摘要表缺少分类", "summary_missing_category"),
+    ("missing a row for category", "summary_missing_category"),
     ("表格分隔行", "bad_separator"),
     ("separator is not GFM", "bad_separator"),
     ("重复章节", "duplicate_section"),
@@ -699,4 +786,3 @@ def validate_ledger(ledger, schema: str = "auto") -> list:
     # REQ-12: a 状态=- row is now a hard bad_status error from check_text; the old
     # placeholder_status warning would double-report the same row (CHK-037 观察①).
     return issues
-

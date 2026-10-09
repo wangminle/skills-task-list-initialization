@@ -85,7 +85,10 @@ class CliBugs1Test(CliTestCase):
             self.assertEqual(before, target.read_text(encoding="utf-8"))
 
     def test_bug033_check_reports_invalid_time_in_custom_section(self):
-        # A custom section with a non-standard date column name must still validate the time.
+        # A custom section with a non-standard date column name is NOT a supported record
+        # table: its ID-shaped row must fail check (BUG-033's rc!=0 outcome survives; the
+        # error class moved to custom_section_record under BUG-097's schema gate — the
+        # row is smuggled past per-row validation, which is the deeper problem).
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "task-list.md"
             target.write_text(
@@ -97,7 +100,8 @@ class CliBugs1Test(CliTestCase):
             )
             result = self.run_cli("check", "--file", str(target), check=False)
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("时间不合法", result.stdout)
+            self.assertIn("不是受支持的记录表", result.stdout)
+            self.assertIn("BUG-001", result.stdout)
 
     def test_bug034_archive_refuses_dangling_references(self):
         # archive must refuse when remaining records reference an archived ID.

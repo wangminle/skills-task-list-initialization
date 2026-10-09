@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import shutil
 import subprocess
 import sys
@@ -82,6 +81,7 @@ def prepare_workspace(root: Path, eval_: dict, with_skill: bool) -> str | None:
     settings = root / ".claude" / "settings.json"
     settings.parent.mkdir(parents=True, exist_ok=True)
     settings.write_text('{"env": {"ENABLE_TOOL_SEARCH": "false"}}\n', encoding="utf-8")
+    return original
 
 
 def run_once(config: str, eval_: dict, run_number: int) -> dict:

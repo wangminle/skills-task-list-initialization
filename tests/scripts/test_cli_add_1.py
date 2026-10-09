@@ -87,7 +87,8 @@ class CliAdd1Test(CliTestCase):
 
     def test_add_date_does_not_seed_completed_time_for_incomplete(self):
         # Regression: --date is a legacy 发现时间 fallback and must NOT seed 完成时间
-        # for 未完成 statuses, otherwise the record is self-contradictory.
+        # for 未完成 statuses, otherwise the record is self-contradictory. An explicit
+        # date-only value lands at day precision (BUG-094), no 00:00 padding.
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "task-list.md"
             self.run_cli("init", "--output", str(target))
@@ -99,11 +100,11 @@ class CliAdd1Test(CliTestCase):
 
             text = target.read_text(encoding="utf-8")
             self.assertIn(
-                "| BUG-001 | 修复 | 未完成bug | 2026-06-17 00:00 | - | 待修复 | - |",
+                "| BUG-001 | 修复 | 未完成bug | 2026-06-17 | - | 待修复 | - |",
                 text,
             )
             self.assertNotIn(
-                "| BUG-001 | 修复 | 未完成bug | 2026-06-17 00:00 | 2026-06-17 00:00 |",
+                "| BUG-001 | 修复 | 未完成bug | 2026-06-17 | 2026-06-17 |",
                 text,
             )
 
@@ -148,6 +149,7 @@ class CliAdd1Test(CliTestCase):
     def test_add_date_backfills_completed_time_for_completed_status(self):
         # Regression: for completed statuses, --date backfills 完成时间 (consistent with
         # the legacy single-date schema and legacy_completed_time); incomplete stays '-'.
+        # Date-only backfill lands at day precision (BUG-094).
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "task-list.md"
             self.run_cli("init", "--output", str(target))
@@ -158,7 +160,7 @@ class CliAdd1Test(CliTestCase):
             )
             text = target.read_text(encoding="utf-8")
             self.assertIn(
-                "| BUG-001 | 修复 | 已完成bug | 2026-06-17 00:00 | 2026-06-17 00:00 | 已修复 | - |",
+                "| BUG-001 | 修复 | 已完成bug | 2026-06-17 | 2026-06-17 | 已修复 | - |",
                 text,
             )
 
@@ -263,7 +265,7 @@ class CliAdd1Test(CliTestCase):
             )
             text = target.read_text(encoding="utf-8")
             self.assertIn(
-                "| BUG-002 | 修复 | 单日期已修复 | 2026-06-17 00:00 | 已修复 | - |",
+                "| BUG-002 | 修复 | 单日期已修复 | 2026-06-17 | 已修复 | - |",
                 text,
             )
 

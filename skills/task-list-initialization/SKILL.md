@@ -5,7 +5,7 @@ description: Use when creating, standardizing, migrating, validating, or maintai
 
 # Task List Initialization
 
-> Skill version **V0.3.8**. Canonical string: repo root `VERSION`.
+> Skill version **V0.3.9**. Canonical string: repo root `VERSION`.
 
 ## Overview
 
@@ -19,8 +19,8 @@ The default model is intentionally small: a fixed header, task-type sections, an
 2. If no task list exists, create one from the standard template **in the user's language** (see Language below).
 3. If a task list exists, preserve records and normalize only with user approval.
 4. Use the standard categories and 7-column table unless project evidence calls for extensions.
-5. When the user wants future agents to keep the list updated, install maintenance rules (opt-in). Prefer `install-maintenance` (and `--with-hook` when they want the Stop-hook guarantee). The command follows the same file-selection logic and rule text as `references/maintenance-rule.md` (`CLAUDE.md` if it exists, else `AGENTS.md`, else create `CLAUDE.md`), matched to the task-list's language. Ask before installing. Stop hook commands use `${CLAUDE_PROJECT_DIR}` so they keep working when the session cwd is not the repo root; re-running `--with-hook` upgrades legacy relative paths. `--with-hook` needs a real `bash` on `PATH` (plain Windows ships none: Git Bash or WSL); without one the installer refuses outright (exit 1, nothing written) instead of installing a hook that can never run.
-6. Validate malformed/invalid ID formats, duplicate IDs, broken table rows, unsupported actions/statuses, invalid timestamps, summary drift, **and preview-breaking markup** (intra-table blank lines, raw HTML tags in cells, unclosed CommonMark code spans) before finishing. `check` passing is a preview gate, not only a schema gate.
+5. When the user wants future agents to keep the list updated, install maintenance rules (opt-in). Prefer `install-maintenance` (and `--with-hook` when they want the Stop-hook guarantee). The command follows the same file-selection logic and rule text as `references/maintenance-rule.md` (`CLAUDE.md` if it exists, else `AGENTS.md`, else create `CLAUDE.md`), matched to the task-list's language. Ask before installing. Stop hook commands use `${CLAUDE_PROJECT_DIR}` so they keep working when the session cwd is not the repo root; re-running `--with-hook` upgrades legacy relative paths and rewrites a script whose bytes drifted from the template (e.g. CRLF line endings from a Windows-side write — bash cannot parse them). `--with-hook` needs a real `bash` on `PATH` (plain Windows ships none: Git Bash or WSL); without one the installer refuses outright (exit 1, nothing written) instead of installing a hook that can never run.
+6. Validate malformed/invalid ID formats, duplicate IDs, broken table rows, unsupported actions/statuses, invalid timestamps, summary drift, **and preview-breaking markup** (intra-table blank lines, raw HTML tags in cells, unclosed CommonMark code spans, a record-table header whose GFM delimiter row is missing or has the wrong column count) before finishing. `check` passing is a preview gate, not only a schema gate.
 7. For a task list that has been used for a while, use `standardize` first. It defaults to diagnostics and reporting only; run repair only when the user explicitly asks for it or passes repair flags.
 
 ## Default Schema
@@ -51,7 +51,7 @@ Optional sections:
 - `动作` must be one of: `修复`, `开发`, `优化`, `调整`, `规划`, `检查`, `文档`, `运维`.
 - Map near-synonyms before writing: 审计/复核/核查/审查/验证/评估 -> `检查`; 重构/清理 -> `优化`; 方案/梳理 -> `规划`; 记录类文档 -> `文档`.
 - Use `BUG-001` style IDs: prefix + three-digit number. IDs are unique, increasing, and never reused.
-- Record both `发现时间` and `完成时间`. Use machine-local timezone timestamps in `YYYY-MM-DD HH:MM` 24-hour format. Use `-` for `完成时间` when the task is not complete. Completed time must not precede found time: `add`/`update` refuse new inversions; `check` warns on legacy ones (exit code unchanged). Correct existing inversions with git evidence via `update --notes-append` — see `references/cli-reference.md`.
+- Record both `发现时间` and `完成时间`. Use machine-local timezone timestamps in `YYYY-MM-DD HH:MM` 24-hour format. Use `-` for `完成时间` when the task is not complete. Completed time must not precede found time: `add`/`update` refuse new inversions; `check` warns on legacy ones (exit code unchanged). The comparison is precision-aware: a date-only value (`YYYY-MM-DD`, kept from single-date migrations) only compares calendar days, so a same-day timestamped counterpart is not an inversion — strictly earlier days still warn. Correct existing inversions with git evidence via `update --notes-append` — see `references/cli-reference.md`.
 - Bug completion normally uses `已修复`; non-bug completion normally uses `已完成`.
 - Use `待修复` for open bugs; use `待办` as the generic open status for docs/ops/reviews/adjustments/optimizations/plans (or `待开发` for feature work). Also supported: `进行中`, `已关闭`, `已解决`.
 - `已解决` is allowed for troubleshooting items that are diagnosed and closed; prefer `已完成` otherwise. It counts as a completed status.
@@ -129,15 +129,17 @@ For large ledgers, archive completed records on demand (never automatic): `archi
 
 ## CLI
 
-Use `$SKILL_DIR/scripts/task_list_cli.py` for repeatable operations: `init`, `add`, `update`, `list`, `sections`, `install-maintenance`, `check`, `summary`, `standardize`, `archive`. Before running commands, **read `references/cli-reference.md`** — it carries the command list, flag semantics, schema/locale auto-detection, write-path rollback behavior (new issues roll back, pre-existing ones are disclosed, not deadlocking), `summary --policy` counting calibers, and archiving details.
+Use `$SKILL_DIR/scripts/task_list_cli.py` for repeatable operations: `init`, `add`, `update`, `list`, `sections`, `install-maintenance`, `check`, `summary`, `standardize`, `archive`, `fleet`. Before running commands, **read `references/cli-reference.md`** — it carries the command list, flag semantics, schema/locale auto-detection, write-path rollback behavior (new issues roll back, pre-existing ones are disclosed, not deadlocking), `summary --policy` counting calibers, archiving details, and the `fleet` batch-inspection mode.
 
-Safety behaviors to rely on even without the reference: writes roll back only what they broke; a summary rewrite never silently re-buckets a conflicted ledger; `--status -` is rejected; `check` is the preview gate and never auto-moves records. Prefer CLI generation for new files, then review the wording manually.
+`fleet --root <dir>` walks a directory tree, inspects every `task-list.md` it finds (same checks as `check` + `standardize` diagnostics + maintenance-rule status), prints a per-file table plus an aggregate report, and exits non-zero if any file fails — use it for periodic multi-project audits instead of hand-written loops. A decode or I/O error while diagnosing one project is recorded on that file and the sweep continues; `--report` is written even when the tree is empty, and it replaces any previous report at that path — but never onto an input ledger: a report path that resolves to one of the scanned files (relative/`..`/symlink aliases included) is refused with exit 2 before anything is written, so the sweep's diagnostics can never overwrite the records they describe. Add `--apply-safe-fixes` to repair each file in place (same safe-fix pipeline as `standardize`) and `--exclude <glob>` to skip backup/eval/reference trees. Custom sections are tolerated, but a table inside one whose first column holds strict task IDs (`BUG-123`-style) without a recognized record header is a `check` **error** — give the section a standard 7-column header or keep its tables ID-free.
+
+Safety behaviors to rely on even without the reference: writes roll back only what they broke; a summary rewrite never silently re-buckets a conflicted ledger; `--status -` is rejected; `check` is the preview gate and never auto-moves records; `add` refuses a section whose record table has no valid same-width delimiter row (other sections in the file stay writable, with the pre-existing defect disclosed). All write commands (`add`, `update`, `archive`, `summary --write`, `standardize` repair modes, `init`, `fleet --apply-safe-fixes`) hold a cross-process file lock (`task-list.md.lock` sidecar, 10s timeout) so concurrent sessions cannot interleave read-modify-write into duplicate IDs; `archive` additionally holds the **archive file's** lock from its first read to its commit, so two different main ledgers archiving into the same shared archive serialize instead of silently dropping one side's records. Prefer CLI generation for new files, then review the wording manually.
 
 ## References
 
 - `references/task-list-standard.md`: four-project summary, common rules, differences, risks, and maintenance guidance. Single source of the migration matrix.
-- `references/cli-reference.md`: full CLI command list, flag semantics, write-path rollback, summary calibers, archiving, and the git-evidence recipe for correcting legacy time inversions (`git log -S` pickaxe + `git show` keyword probes + `update --notes-append`).
+- `references/cli-reference.md`: full CLI command list, flag semantics, write-path rollback and cross-process locking, summary calibers, archiving, `fleet` batch inspection, and the git-evidence recipe for correcting legacy time inversions (`git log -S` pickaxe + `git show` keyword probes + `update --notes-append`).
 - `references/task-list-template.md`: canonical Markdown templates for each profile.
 - `references/maintenance-rule.md`: canonical maintenance-rule text (Chinese and English), file-selection logic, language-matching guidance, and optional `Stop`-hook guarantee layer for installing into a project's `CLAUDE.md`/`AGENTS.md`.
-- `evals/evals.json`: skill-creator evaluation cases.
-- Repo root `VERSION`: current skill version string (`V0.3.8`).
+- `evals/evals.json`: skill-creator evaluation cases. `evals/trigger-evals.json`: trigger/behavior eval matrix. `evals/run-evals.py` + `aggregate-benchmark.py`: headless real-agent runner and telemetry aggregation (with-skill vs baseline configurations).
+- Repo root `VERSION`: current skill version string (`V0.3.9`).

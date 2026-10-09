@@ -219,6 +219,49 @@ def parse_sections(text: str) -> dict[str, dict[str, object]]:
                 sections[current]["rows"].append((index, cells))
     return sections
 
+def find_header_separator_defects(text: str) -> list[tuple[int, str, str, int, int]]:
+    """Find record-table headers whose delimiter row is missing or has the wrong width.
+
+    parse_sections registers a table header from any ``|``-line whose first cell is
+    ``ID`` without requiring a GFM delimiter row, so a header with no ``| --- |``
+    line (or one with a different column count) still produced a "valid" record
+    table that check let through — while CommonMark renders the whole block as
+    plain text because the delimiter must IMMEDIATELY follow the header and match
+    its column count (BUG-108).
+
+    Returns (header_line_index, section_title, kind, header_count, sep_count)
+    tuples; kind is "missing" (the next non-fenced line is not a delimiter row)
+    or "width" (a delimiter row follows but its cell count differs). Fenced
+    example tables never count; a header that appears before any ``##`` heading
+    carries an empty section title.
+    """
+    lines = text.splitlines()
+    fence = _fenced_code_mask(lines)
+    defects: list[tuple[int, str, str, int, int]] = []
+    current = ""
+    for index, line in enumerate(lines):
+        if fence[index]:
+            continue
+        heading = re.match(r"^##\s+(.+?)\s*$", line)
+        if heading:
+            current = heading.group(1)
+            continue
+        if not _is_table_line(line):
+            continue
+        cells = split_cells(line)
+        if not cells or cells[0].upper() != "ID":
+            continue
+        sep_cells: list[str] | None = None
+        if index + 1 < len(lines) and not fence[index + 1]:
+            next_cells = split_cells(lines[index + 1])
+            if _is_separator_row(next_cells):
+                sep_cells = next_cells
+        if sep_cells is None:
+            defects.append((index, current, "missing", len(cells), 0))
+        elif len(sep_cells) != len(cells):
+            defects.append((index, current, "width", len(cells), len(sep_cells)))
+    return defects
+
 def collect_records(text: str) -> list[tuple[str, int, list[str]]]:
     records = []
     for title, info in parse_sections(text).items():
